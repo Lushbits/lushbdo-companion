@@ -303,13 +303,14 @@ public class LineBoardTests
     }
 
     [Fact]
-    public void AnUnfadeRevealingOldLinesNeverReEmitsThem()
+    public void ReappearingOldRowsNeverReEmit()
     {
-        // The game fades an idle chat; OCR goes blind; a realign re-baselines
-        // on whatever fragments stay readable. When loot un-fades the chat,
-        // the old rows materialize mid-screen without anything scrolling —
-        // and must never count again (field log, 21:15:32 and 21:17:05: the
-        // same ×3 row was sent three times this way).
+        // The transparent chat washes out row by row against a bright
+        // world; a realign re-baselines on whatever rows stay readable.
+        // When the camera turns and contrast returns, the old rows
+        // materialize mid-screen without anything scrolling — and must
+        // never count again (field log, 21:15:32 and 21:17:05: the same ×3
+        // row was sent three times this way).
         const string oldA = "You have obtained [Sea Monster's Ooze] x36. (20:57)";
         const string oldB = "You have obtained [Cox Pirates Extermination Seal] x3. (21:13)";
         Pass((RoughStone, 60), (Weeds, 80)); // the crippled baseline: what a faded screen still reads as
@@ -359,12 +360,14 @@ public class LineBoardTests
     }
 
     [Fact]
-    public void AFadedChatHoldsAndResumesInsteadOfRealigning()
+    public void AWashedOutChatHoldsAndResumesInsteadOfRealigning()
     {
-        // The game fades an idle chat and OCR goes near-blind. Blindness is
+        // The transparent chat washes out against a bright world (or
+        // another window covers it) and OCR goes near-blind. Blindness is
         // not a different screen: the board holds its trackers through the
-        // fade, and the un-fade matches them again — old rows recognized,
-        // and the pickup that arrived meanwhile entering at the bottom.
+        // blind spell, and the returning text matches them again — old rows
+        // recognized, and the pickup that arrived meanwhile entering at the
+        // bottom.
         const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
         const string blood = "You have obtained [Ox Blood] x8. (22:11)";
         Pass((RoughStone, 40), (Weeds, 60), (salt, 80)); // baseline
