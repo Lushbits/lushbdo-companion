@@ -55,8 +55,10 @@ public sealed class TrayContext : ApplicationContext
             ? $"Paired. Site: {_settings.BaseUrl}"
             : "Not paired yet — open Settings and paste a device token from the site's Devices page.");
         _log.Append(_settings.Region is { } region
-            ? $"Loot log region saved: {region.Width}×{region.Height} at ({region.X}, {region.Y}). Right-click the tray icon → Start watching."
-            : "No loot log region yet — right-click the tray icon → Pick loot log region while the game shows its loot chat.");
+            ? $"Loot log region saved: {region.Width}×{region.Height} at ({region.X}, {region.Y}) in the game window. Right-click the tray icon → Start watching."
+            : _settings.HasScreenRelativeRegion
+                ? "Capture is tied to the game window now, and the old screen-relative region cannot be carried over — right-click the tray icon → Pick loot log region once more."
+                : "No loot log region yet — right-click the tray icon → Pick loot log region while the game shows its loot chat.");
 
         if (!_settings.IsPaired) ShowSettings();
 
@@ -78,19 +80,81 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_watcher is not null) StopWatching("Stopped watching while the region is re-picked.");
 
-        using var picker = new RegionPickerForm();
-        if (picker.ShowDialog() != DialogResult.OK)
+        // The normal path: photograph one frame of the game's own window and
+        // pick on that still. The game can sit buried under other windows —
+        // the compositor serves its surface regardless, so there is no
+        // arranging of windows before opening the tray menu.
+        Rectangle? region = null;
+        if (GameWindow.Find() is { } game)
         {
-            _log.Append("Region pick cancelled.");
-            return;
+            try
+            {
+                using var still = await WgcFrameSource.CaptureStillAsync(game.Hwnd);
+                using var picker = new FrozenRegionPickerForm(still, Screen.FromHandle(game.Hwnd).Bounds);
+                if (picker.ShowDialog() != DialogResult.OK)
+                {
+                    _log.Append("Region pick cancelled.");
+                    return;
+                }
+                region = picker.Selection;
+            }
+            catch (Exception e)
+            {
+                _log.Append($"Could not photograph the game window ({e.Message}) — picking on the live screen instead.");
+            }
+        }
+        else
+        {
+            _log.Append($"The game window ({GameWindow.Description}) was not found — picking on the live screen instead.");
         }
 
-        var region = picker.Selection;
-        _settings.SetRegion(region);
+        // Fallback: the live overlay, after a heads-up so the game can be
+        // brought in front. The pick lands in screen pixels; anchoring it to
+        // the game window still needs that window, so a pick made with no game
+        // running cannot be saved — window capture has nothing else to aim at.
+        if (region is null)
+        {
+            await ShowCountdownAsync();
+            using var picker = new RegionPickerForm();
+            if (picker.ShowDialog() != DialogResult.OK)
+            {
+                _log.Append("Region pick cancelled.");
+                return;
+            }
+            if (GameWindow.Find() is not { } found)
+            {
+                _log.Append($"Nothing saved — the picked rectangle cannot be anchored to the game window while the game ({GameWindow.Description}) is not running. Start it and pick again.");
+                ShowLog();
+                return;
+            }
+            var screenRect = picker.Selection;
+            var anchored = screenRect with { X = screenRect.X - found.Bounds.X, Y = screenRect.Y - found.Bounds.Y };
+            if (!anchored.IntersectsWith(new Rectangle(Point.Empty, found.Bounds.Size)))
+            {
+                _log.Append("Nothing saved — the picked rectangle is not over the game window.");
+                ShowLog();
+                return;
+            }
+            region = anchored;
+        }
+
+        _settings.SetRegion(region.Value);
         _settings.Save();
         _watchItem.Enabled = true;
-        _log.Append($"Loot log region set: {region.Width}×{region.Height} at ({region.X}, {region.Y}).");
+        _log.Append($"Loot log region set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
         await StartWatchingAsync(); // picking a region is the intent to watch it
+    }
+
+    private static async Task ShowCountdownAsync()
+    {
+        using var note = new CountdownForm();
+        note.SetText("Switch to the game — picking in 3…");
+        note.Show();
+        for (var i = 3; i >= 1; i--)
+        {
+            note.SetText($"Switch to the game — picking in {i}…");
+            await Task.Delay(1000);
+        }
     }
 
     private async Task ToggleWatchingAsync()

@@ -16,23 +16,44 @@ public sealed class Settings
     public string BaseUrl { get; set; } = "https://lushbdo.com";
     public string TokenProtected { get; set; } = "";
 
-    // The loot-chat rectangle from the region picker, in physical screen
-    // pixels (virtual-desktop coordinates). Zero size means never picked.
+    // The loot-chat rectangle from the region picker, in physical pixels
+    // relative to the game window's visible top-left — the surface window
+    // capture serves. Window-relative on purpose: it survives the game
+    // restarting or the window moving. Zero size means never picked.
+    public int WindowRegionX { get; set; }
+    public int WindowRegionY { get; set; }
+    public int WindowRegionWidth { get; set; }
+    public int WindowRegionHeight { get; set; }
+
+    // Builds before window capture stored a screen-relative region under these
+    // names. It cannot be translated without the game window it was picked
+    // over, so migrating is one re-pick; the old values are only read so the
+    // app can say why that re-pick is needed, and are scrubbed by it.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int RegionX { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int RegionY { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int RegionWidth { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int RegionHeight { get; set; }
 
     [JsonIgnore]
-    public Rectangle? Region =>
-        RegionWidth > 0 && RegionHeight > 0 ? new Rectangle(RegionX, RegionY, RegionWidth, RegionHeight) : null;
+    public bool HasScreenRelativeRegion => RegionWidth > 0 && RegionHeight > 0;
 
-    public void SetRegion(Rectangle region)
+    [JsonIgnore]
+    public Rectangle? Region =>
+        WindowRegionWidth > 0 && WindowRegionHeight > 0
+            ? new Rectangle(WindowRegionX, WindowRegionY, WindowRegionWidth, WindowRegionHeight)
+            : null;
+
+    public void SetRegion(Rectangle regionInWindow)
     {
-        RegionX = region.X;
-        RegionY = region.Y;
-        RegionWidth = region.Width;
-        RegionHeight = region.Height;
+        WindowRegionX = regionInWindow.X;
+        WindowRegionY = regionInWindow.Y;
+        WindowRegionWidth = regionInWindow.Width;
+        WindowRegionHeight = regionInWindow.Height;
+        RegionX = RegionY = RegionWidth = RegionHeight = 0; // the migration ends here
     }
 
     private static string Dir =>

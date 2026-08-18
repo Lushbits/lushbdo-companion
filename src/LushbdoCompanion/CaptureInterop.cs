@@ -8,7 +8,7 @@ namespace LushbdoCompanion;
 
 /// <summary>
 /// The unmanaged plumbing beneath Windows.Graphics.Capture: a D3D11 device for
-/// the frame pool, the factory that turns an HMONITOR into a capture item, and
+/// the frame pool, the factory that turns an HWND into a capture item, and
 /// raw byte access to SoftwareBitmap pixels. Passive by construction — every
 /// entry point here produces pixels, none of them sends input anywhere.
 /// </summary>
@@ -51,7 +51,7 @@ internal static class CaptureInterop
         finally { Marshal.Release(dxgiDevice); }
     }
 
-    // --- HMONITOR → GraphicsCaptureItem -------------------------------------
+    // --- HWND → GraphicsCaptureItem -----------------------------------------
 
     [ComImport, Guid("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IGraphicsCaptureItemInterop
@@ -60,44 +60,18 @@ internal static class CaptureInterop
         IntPtr CreateForMonitor(IntPtr monitor, ref Guid iid);
     }
 
-    public static GraphicsCaptureItem CreateItemForMonitor(IntPtr hmonitor)
+    /// <summary>
+    /// A capture item for one window's own compositor surface. The compositor
+    /// serves it even when the window is buried under others — and it is
+    /// structurally the only thing this item can ever see: no desktop, no
+    /// other windows, just the game.
+    /// </summary>
+    public static GraphicsCaptureItem CreateItemForWindow(IntPtr hwnd)
     {
         var iid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760"); // IGraphicsCaptureItem
-        var abi = GraphicsCaptureItem.As<IGraphicsCaptureItemInterop>().CreateForMonitor(hmonitor, ref iid);
+        var abi = GraphicsCaptureItem.As<IGraphicsCaptureItemInterop>().CreateForWindow(hwnd, ref iid);
         try { return GraphicsCaptureItem.FromAbi(abi); }
         finally { Marshal.Release(abi); }
-    }
-
-    // --- Which monitor holds the picked region ------------------------------
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MONITORINFO
-    {
-        public int Size;
-        public RECT Monitor;
-        public RECT Work;
-        public uint Flags;
-    }
-
-    [DllImport("user32.dll", ExactSpelling = true)]
-    private static extern IntPtr MonitorFromRect(ref RECT rect, uint flags);
-
-    [DllImport("user32.dll", ExactSpelling = true)]
-    private static extern bool GetMonitorInfoW(IntPtr hmonitor, ref MONITORINFO info);
-
-    /// <summary>The monitor nearest the region, with its bounds in physical pixels.</summary>
-    public static (IntPtr Handle, Rectangle Bounds) MonitorFor(Rectangle region)
-    {
-        const uint MonitorDefaultToNearest = 2;
-        var rect = new RECT { Left = region.Left, Top = region.Top, Right = region.Right, Bottom = region.Bottom };
-        var handle = MonitorFromRect(ref rect, MonitorDefaultToNearest);
-        var info = new MONITORINFO { Size = Marshal.SizeOf<MONITORINFO>() };
-        if (!GetMonitorInfoW(handle, ref info))
-            throw new InvalidOperationException("the monitor's bounds could not be read.");
-        return (handle, Rectangle.FromLTRB(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom));
     }
 
     // --- Raw pixels of a SoftwareBitmap -------------------------------------
