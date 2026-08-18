@@ -56,16 +56,20 @@ public static class LootParser
     // The x in `xN` is the least reliable glyph on the line (`x23` / `*23` /
     // `x"` all observed); the digits mostly hold. Accept the misread marks,
     // never a bare number — context decides those (see QuantityTail use).
+    // The timestamp is shape only, never data, so its closing paren may be
+    // mangled (`}` observed on keyed reads) or missing entirely.
+    private const string Stamp = @"\(\d{1,2}:\d{2}\s*[)\]}]?";
+
     private static readonly Regex TailAfterBracket = new(
-        @"^\s*(?:(?<one>\.)|[xX×\*]\s?(?<n>\d[\d,]*)\s*\.?)\s*(\(\d{1,2}:\d{2}\))?\s*$",
+        $@"^\s*(?:(?<one>\.)|[xX×\*]\s?(?<n>\d[\d,]*)\s*\.?)\s*({Stamp})?\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex QuantityTailShape = new(
-        @"^[xX×\*]?\s?(?<n>\d[\d,]*)\s*(?:\.\s*(\(\d{1,2}:\d{2}\))?|\(\d{1,2}:\d{2}\))\s*$",
+        $@"^[xX×\*]?\s?(?<n>\d[\d,]*)\s*(?:\.\s*({Stamp})?|{Stamp})\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex TimestampTailShape = new(
-        @"^\.?\s*\(\d{1,2}:\d{2}\)\s*$",
+        $@"^\.?\s*{Stamp}\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // A whole line's ending — a count and/or timestamp. A real mid-name wrap
@@ -73,7 +77,7 @@ public static class LootParser
     // fragment that ends like this is a complete line whose `]` misread
     // (`)` observed in the field), and no wrap at all.
     private static readonly Regex WholeLineTail = new(
-        @"(?:[xX×\*]\s?\d[\d,]*\s*\.?\s*(?:\(\d{1,2}:\d{2}\))?|\(\d{1,2}:\d{2}\))\s*$",
+        $@"(?:[xX×\*]\s?\d[\d,]*\s*\.?\s*({Stamp})?|{Stamp})\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static Reading Parse(string line)
