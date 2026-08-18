@@ -58,8 +58,10 @@ public sealed class LootWatcher : IDisposable
     private string? _traceDir;
     private string? _tracePrefix;
     private int _traceDumps;
-    private const int TraceDumpEveryPasses = 20;  // one snapshot ~every 20 s of activity
-    private const int TraceDumpCap = 100;         // ≤ ~50 MB of PNGs per session
+    private TextKeyer? _keyer;         // trace-only preview of the planned per-frame keying
+    private byte[] _keyedDump = [];
+    private const int TraceDumpEveryPasses = 20;  // one snapshot set ~every 20 s of activity
+    private const int TraceDumpCap = 60;          // 3 PNGs per set; ≤ ~50 MB per session
     private long _framesCaptured;
     private long _ocrPasses;
     private long _pickups;
@@ -136,35 +138,45 @@ public sealed class LootWatcher : IDisposable
     }
 
     /// <summary>
-    /// A periodic PNG of the exact stabilized image OCR reads — the ground
-    /// truth for tuning readability work (text-color keying) against real
-    /// scenes instead of assumptions. Trace-only, capped.
+    /// A periodic snapshot set — the median OCR reads today, the raw frame,
+    /// and the raw frame keyed by <see cref="TextKeyer"/> — the ground truth
+    /// for tuning per-frame keying against real scenes before it replaces
+    /// the median in the OCR path. Trace-only, capped.
     /// </summary>
-    private unsafe void MaybeDumpStabilized()
+    private void MaybeDumpStabilized(RegionFrame frame)
     {
         if (_trace is null || _traceDumps >= TraceDumpCap || _ocrPasses % TraceDumpEveryPasses != 0) return;
         try
         {
             var w = _stabilizer.Width;
             var h = _stabilizer.Height;
-            using var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-            var data = bmp.LockBits(new Rectangle(0, 0, w, h),
-                System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-            fixed (byte* src = _stabilizer.Stabilized)
-            {
-                for (var y = 0; y < h; y++)
-                    Buffer.MemoryCopy(src + y * w * 4, (byte*)data.Scan0 + y * data.Stride, w * 4, w * 4);
-            }
-            bmp.UnlockBits(data);
-            var path = Path.Combine(_traceDir!, $"{_tracePrefix}-pass{_ocrPasses:D6}.png");
-            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            SavePng(_stabilizer.Stabilized, w, h, $"pass{_ocrPasses:D6}-median");
+            SavePng(frame.Pixels, w, h, $"pass{_ocrPasses:D6}-raw");
+            _keyer ??= new TextKeyer();
+            if (_keyedDump.Length != w * h * 4) _keyedDump = new byte[w * h * 4];
+            _keyer.Key(frame.Pixels, w, h, _keyedDump);
+            SavePng(_keyedDump, w, h, $"pass{_ocrPasses:D6}-keyed");
             _traceDumps++;
-            Trace($"dump  {Path.GetFileName(path)}");
+            Trace($"dump  pass{_ocrPasses:D6} (median / raw / keyed)");
         }
         catch
         {
             // A failed snapshot must never take the watcher down.
         }
+    }
+
+    private unsafe void SavePng(byte[] bgra, int w, int h, string suffix)
+    {
+        using var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        var data = bmp.LockBits(new Rectangle(0, 0, w, h),
+            System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        fixed (byte* src = bgra)
+        {
+            for (var y = 0; y < h; y++)
+                Buffer.MemoryCopy(src + y * w * 4, (byte*)data.Scan0 + y * data.Stride, w * 4, w * 4);
+        }
+        bmp.UnlockBits(data);
+        bmp.Save(Path.Combine(_traceDir!, $"{_tracePrefix}-{suffix}.png"), System.Drawing.Imaging.ImageFormat.Png);
     }
 
     public async Task StartAsync()
@@ -265,7 +277,7 @@ public sealed class LootWatcher : IDisposable
 
             if (_lastOcrImage.Length != length) _lastOcrImage = new byte[length];
             _stabilizer.Stabilized.AsSpan(0, length).CopyTo(_lastOcrImage);
-            MaybeDumpStabilized();
+            MaybeDumpStabilized(frame);
             FillOcrInput();
             release = false; // RecognizeAsync owns the flag now
             _ = RecognizeAsync();
