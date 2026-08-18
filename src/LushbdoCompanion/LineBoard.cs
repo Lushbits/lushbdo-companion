@@ -33,13 +33,14 @@ namespace LushbdoCompanion;
 ///
 /// Emission also requires provenance, because the chat is bottom-anchored:
 /// a new line can only ever enter at the bottom, only while content moves
-/// up, and only as many lines as the content moved. The game fades an idle
-/// chat, OCR goes blind, and the un-fade makes old rows "appear" mid-screen
-/// over whatever crippled baseline the blind spell left behind (field log,
-/// 21:15:32: an already-sent ×3 re-emitted exactly this way — the one
-/// forbidden outcome). So: a blank read never completes a baseline, and a
-/// tracker born anywhere but the moving bottom edge is born old — visible
-/// in the log, never counted.
+/// up, and only as many lines as the content moved. The chat background is
+/// transparent (#2) and the world moves behind it — rows over bright
+/// scenery wash out and OCR loses them, then the camera turns and they
+/// "appear" mid-screen again over whatever crippled baseline the blind
+/// spell left behind (field log, 21:15:32: an already-sent ×3 re-emitted
+/// exactly this way — the one forbidden outcome). So: a blank read never
+/// completes a baseline, and a tracker born anywhere but the moving bottom
+/// edge is born old — visible in the log, never counted.
 ///
 /// Single-threaded by contract: the watcher's one-OCR-in-flight gate is the
 /// lock.
@@ -178,18 +179,19 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         else if (lines.Count * 2 < _trackers.Count)
         {
             // No text matched anything, and there was barely any text to
-            // match: the chat faded (the game dims an idle chat) or is
-            // covered. Blindness is not a different screen — realigning here
-            // is what re-baselined on faded fragments and let the un-fade
-            // re-count old rows (field log, 21:15–21:17). Hold every
-            // tracker; when the text comes back it will match them again,
-            // and anything that arrived meanwhile enters at the bottom as
+            // match: the transparent chat washed out against a bright
+            // world, or another window covers it. Blindness is not a
+            // different screen — realigning here is what re-baselined on
+            // the few readable fragments and let the returning rows be
+            // re-counted (field log, 21:15–21:17). Hold every tracker;
+            // when the text comes back it will match them again, and
+            // anything that arrived meanwhile enters at the bottom as
             // always.
             trace?.Invoke($"vote  near-blind ({lines.Count} line(s) vs {_trackers.Count} tracker(s)) — holding");
             if (!_blindSpell)
             {
                 _blindSpell = true;
-                note("The chat stopped reading (faded or covered) — holding position until it returns.");
+                note("The chat stopped reading (washed out or covered) — holding position until it returns.");
             }
             return;
         }
@@ -232,9 +234,10 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
 
     private void AdoptBaseline(List<OcrLineInput> lines)
     {
-        // A blank read anchors nothing: whatever appears after it (an idle
-        // chat un-fading, a loading screen lifting) is old content revealing
-        // itself, not pickups. Wait for a read with content to baseline on.
+        // A blank read anchors nothing: whatever appears after it (a washed
+        // out chat regaining contrast, a loading screen lifting) is old
+        // content revealing itself, not pickups. Wait for a read with
+        // content to baseline on.
         if (lines.Count == 0) return;
 
         foreach (var line in lines)
