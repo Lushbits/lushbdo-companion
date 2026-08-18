@@ -63,6 +63,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         public readonly Dictionary<string, int> Readings = new(StringComparer.Ordinal);
         public int PassesUnseen;
         public bool Emitted;            // sent, consumed as a tail, skipped, or adopted as baseline
+        public bool HasLootShape;       // some reading parses as loot grammar — this row is content, not furniture
         public string? SettledText;
         public LootParser.Reading Settled;
         public bool MatchedThisPass;
@@ -216,9 +217,16 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         // bottom-anchored, so genuinely new lines enter at the bottom edge,
         // below everything already tracked — and there can only be as many
         // of them as the content just moved up. Lines that "appear" anywhere
-        // else are old content revealing itself (the idle chat un-fading is
-        // the field case) and are born already-counted.
-        var bottom = _trackers[^1].Y; // trackers stay Y-sorted; shifted in lockstep above
+        // else are old content revealing itself (rows regaining contrast
+        // against the moving world) and are born already-counted. The
+        // bottom edge belongs to the *loot*: a region can catch the chat's
+        // input row or phantom world text below the log (field log, 22:28:
+        // every pickup born old above a junk row), and furniture that never
+        // parses as loot cannot anchor the gate.
+        var bottom = double.MinValue;
+        foreach (var t in _trackers)
+            if (t.HasLootShape && t.Y > bottom) bottom = t.Y;
+        if (bottom == double.MinValue) bottom = _trackers[^1].Y; // no loot-shaped rows yet — best we have
         var newBudget = dy < 0 ? (int)Math.Round(-dy / MedianRowPitch(lines)) : 0;
 
         MatchAndTrack(lines, bottom, newBudget);
@@ -242,7 +250,12 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
 
         foreach (var line in lines)
         {
-            var t = new Tracker { Y = line.Y, Emitted = true };
+            var t = new Tracker
+            {
+                Y = line.Y,
+                Emitted = true,
+                HasLootShape = LootParser.Parse(line.Text).Kind != LootParser.Kind.Unrecognized
+            };
             t.Readings[line.Text] = 1;
             _trackers.Add(t);
         }
@@ -316,7 +329,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     private void MatchAndTrack(List<OcrLineInput> lines, double bottom, int newBudget)
     {
         var tolerance = 0.6 * _lineHeight;
-        List<OcrLineInput>? unmatched = null;
+        List<(OcrLineInput Line, bool Loot)>? unmatched = null;
         foreach (var line in lines)
         {
             Tracker? nearest = null;
@@ -341,17 +354,19 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             }
             else
             {
-                (unmatched ??= []).Add(line);
+                (unmatched ??= []).Add((line, LootParser.Parse(line.Text).Kind != LootParser.Kind.Unrecognized));
             }
         }
 
         if (unmatched is not null)
         {
-            // Bottom-most first: when the budget and the arrivals disagree,
-            // the rows nearest the bottom edge are the arrivals.
-            unmatched.Sort((a, b) => b.Y.CompareTo(a.Y));
+            // Loot-shaped candidates first, bottom-most first within each:
+            // the budget goes to what can actually be a pickup, and when
+            // the budget and the candidates disagree, the rows nearest the
+            // bottom edge are the arrivals. Junk never out-competes loot.
+            unmatched.Sort((a, b) => a.Loot != b.Loot ? b.Loot.CompareTo(a.Loot) : b.Line.Y.CompareTo(a.Line.Y));
             var bornOld = 0;
-            foreach (var line in unmatched)
+            foreach (var (line, loot) in unmatched)
             {
                 var inBottomZone = line.Y >= bottom - 0.5 * _lineHeight;
                 if (inBottomZone && newBudget <= 0)
@@ -366,7 +381,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 }
                 if (inBottomZone) newBudget--;
                 else bornOld++;
-                var t = new Tracker { Y = line.Y, Emitted = !inBottomZone };
+                var t = new Tracker { Y = line.Y, Emitted = !inBottomZone, HasLootShape = loot };
                 t.Readings[line.Text] = 1;
                 t.MatchedThisPass = true;
                 _trackers.Add(t);
@@ -415,6 +430,8 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             t.Readings.Remove(evict);
         }
         t.Readings[text] = 1;
+        if (!t.HasLootShape && LootParser.Parse(text).Kind != LootParser.Kind.Unrecognized)
+            t.HasLootShape = true;
     }
 
     private void DropDepartedTrackers()
@@ -457,13 +474,30 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     {
         foreach (var t in _trackers)
         {
-            if (t.Emitted || t.SettledText is not null) continue;
+            if (t.Emitted) continue;
+            // A settled-but-waiting head (NameOnly/NameOpen) may be a real
+            // wrap — or a row whose right side washed out against a bright
+            // world, truncating the count off the reading (field log,
+            // 22:28:11: an x9 died waiting for a tail that never existed).
+            // Only a strict extension of the settled text can replace it:
+            // the same row, with more of it read.
+            var upgradable = t.SettledText is not null &&
+                             t.Settled.Kind is LootParser.Kind.NameOnly or LootParser.Kind.NameOpen;
+            if (t.SettledText is not null && !upgradable) continue;
+
             string? bestText = null;
             var bestCount = 0;
             LootParser.Reading bestParsed = default;
             foreach (var r in t.Readings)
             {
-                if (r.Value < ConsensusReads || r.Value <= bestCount) continue;
+                if (r.Value < ConsensusReads) continue;
+                if (t.SettledText is not null)
+                {
+                    if (r.Key.Length <= t.SettledText.Length ||
+                        !r.Key.StartsWith(t.SettledText, StringComparison.Ordinal)) continue;
+                    if (bestText is not null && r.Key.Length <= bestText.Length) continue; // longest extension wins
+                }
+                else if (r.Value <= bestCount) continue;
                 var parsed = LootParser.Parse(r.Key);
                 if (parsed.Kind == LootParser.Kind.Unrecognized) continue;
                 bestText = r.Key;
@@ -557,14 +591,11 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 else
                     emit(name, below.Settled.Count, $"{head.SettledText} ⏎ {below.SettledText}");
             }
-            else
-            {
-                // Only a NameTail can finish an open bracket. Anything else
-                // below means the rest of this name is unrecoverable — and a
-                // knowingly incomplete name is never sent.
-                head.Emitted = true;
-                note($"skip  \"{head.SettledText}\" — wrapped name whose ending never arrived");
-            }
+            // Anything else below: this may be a real wrap whose tail was
+            // lost — or a truncated reading whose full line can still
+            // recur and upgrade it (SettleAndEmit). Keep waiting; the
+            // scroll-off/staleness skip in DropDepartedTrackers is the
+            // deadline, and a knowingly incomplete name is never sent.
             return;
         }
 
@@ -581,11 +612,12 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 emit(head.Settled.Name, 1, $"{head.SettledText} ⏎ {below.SettledText}");
                 break;
             default:
-                // The next line is a full message of its own — this head's
-                // tail is unrecoverable and its count unknowable. Skip aloud
-                // rather than invent a count.
-                head.Emitted = true;
-                note($"skip  \"{head.SettledText}\" — wrapped line whose quantity never arrived");
+                // The next line is a full message of its own. This may be a
+                // real wrap whose tail was lost — or a reading truncated by
+                // a washed-out right side, whose full line can still recur
+                // and upgrade it (SettleAndEmit). Keep waiting rather than
+                // invent a count or give up early; the scroll-off/staleness
+                // skip in DropDepartedTrackers is the deadline.
                 break;
         }
     }

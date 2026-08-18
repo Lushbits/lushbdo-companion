@@ -279,7 +279,7 @@ public class LineBoardTests
     }
 
     [Fact]
-    public void AWrappedNameWhoseEndingNeverArrivesIsSkippedAloud()
+    public void AWrappedNameWhoseEndingNeverArrivesIsSkippedAloudAtItsDeadline()
     {
         const string head = "You have obtained [Deep Tide-Dyed Standardized Timber";
         const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
@@ -287,11 +287,16 @@ public class LineBoardTests
         Pass((Weeds, 64), (head, 82), (salt, 100)); // the next line is a full message, not the name's rest
         Pass((Weeds, 64), (head, 82), (salt, 100));
         Assert.Equal([("Rock Salt Ingot", 2, salt)], _emitted);
+        // The head keeps waiting — its full line could still recur and
+        // upgrade it. The deadline is the row leaving, not a neighbor.
+        Assert.DoesNotContain(_notes, n => n.Contains("ending never arrived"));
+        for (var i = 0; i < 7; i++) Pass((Weeds, 64), (salt, 100)); // the head row is gone for good
         Assert.Contains(_notes, n => n.Contains("ending never arrived"));
+        Assert.Single(_emitted);
     }
 
     [Fact]
-    public void AWrappedHeadWhoseTailNeverArrivesIsSkippedAloud()
+    public void AWrappedHeadWhoseTailNeverArrivesIsSkippedAloudAtItsDeadline()
     {
         const string head = "You have obtained [Secret Book of the Forgotten Adventurer]";
         const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
@@ -299,7 +304,50 @@ public class LineBoardTests
         Pass((Weeds, 64), (head, 82), (salt, 100)); // the next line is a full message, not a tail
         Pass((Weeds, 64), (head, 82), (salt, 100));
         Assert.Equal([("Rock Salt Ingot", 2, salt)], _emitted);
+        Assert.DoesNotContain(_notes, n => n.Contains("quantity never arrived"));
+        for (var i = 0; i < 7; i++) Pass((Weeds, 64), (salt, 100)); // the head row is gone for good
         Assert.Contains(_notes, n => n.Contains("quantity never arrived"));
+        Assert.Single(_emitted);
+    }
+
+    [Fact]
+    public void ATruncatedReadingUpgradesWhenTheFullLineReturns()
+    {
+        // The right side of a row can wash out against bright scenery: OCR
+        // reads "You have obtained [Troll Blood]" and the count is missing
+        // (field log, 22:28:11 — an x9 died waiting for a tail that never
+        // existed). The truncation settles as a waiting head; when the
+        // background darkens and the full line recurs, the strict extension
+        // replaces it and the count lands.
+        const string partial = "You have obtained [Troll Blood]";
+        const string full = "You have obtained [Troll Blood] x9. (22:28)";
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 82), (partial, 100));
+        Pass((Weeds, 82), (partial, 100)); // settles as a head, count unknown — waiting
+        Assert.Empty(_emitted);
+        Pass((Weeds, 82), (full, 100));    // the wash lifts
+        Pass((Weeds, 82), (full, 100));
+        Assert.Equal([("Troll Blood", 9, full)], _emitted);
+    }
+
+    [Fact]
+    public void JunkBelowTheContentCannotStealTheBottomEdge()
+    {
+        // The picked region can catch the chat's bottom furniture (input
+        // row, tab labels) or phantom world text below the log. Those rows
+        // never parse as loot, so they cannot anchor the bottom edge that
+        // admits new content — arrivals right under the last loot row still
+        // count (field log, 22:28: every pickup born old above a junk row
+        // pinned at the region's bottom edge).
+        const string junk = "All System Party Guild";
+        const string blood = "You have obtained [Troll Blood] x6. (22:28)";
+        Pass((RoughStone, 40), (Weeds, 60), (junk, 120)); // baseline
+        Pass((RoughStone, 40), (Weeds, 60), (junk, 120));
+        // A pickup arrives: the log scrolls up; the furniture stays put.
+        Pass((RoughStone, 20), (Weeds, 40), (blood, 60), (junk, 120));
+        Pass((RoughStone, 20), (Weeds, 40), (blood, 60), (junk, 120));
+        Assert.Equal([("Troll Blood", 6, blood)], _emitted);
+        Assert.DoesNotContain(_notes, n => n.Contains("revealed"));
     }
 
     [Fact]
