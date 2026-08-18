@@ -55,6 +55,11 @@ public sealed class LootWatcher : IDisposable
     private byte[] _lastOcrImage = [];
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
     private readonly object _traceLock = new();
+    private string? _traceDir;
+    private string? _tracePrefix;
+    private int _traceDumps;
+    private const int TraceDumpEveryPasses = 20;  // one snapshot ~every 20 s of activity
+    private const int TraceDumpCap = 100;         // ≤ ~50 MB of PNGs per session
     private long _framesCaptured;
     private long _ocrPasses;
     private long _pickups;
@@ -94,9 +99,12 @@ public sealed class LootWatcher : IDisposable
             }
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lushbdo-companion");
             Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, $"trace-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+            _traceDir = dir;
+            _tracePrefix = $"trace-{DateTime.Now:yyyyMMdd-HHmmss}";
+            _traceDumps = 0;
+            var path = Path.Combine(dir, _tracePrefix + ".log");
             _trace = new StreamWriter(path) { AutoFlush = true };
-            _log($"OCR trace started: {path}");
+            _log($"OCR trace started: {path} (plus periodic snapshots of what OCR reads)");
         }
     }
 
@@ -125,6 +133,38 @@ public sealed class LootWatcher : IDisposable
     {
         _log(message);
         if (_trace is not null) Trace("log   " + message);
+    }
+
+    /// <summary>
+    /// A periodic PNG of the exact stabilized image OCR reads — the ground
+    /// truth for tuning readability work (text-color keying) against real
+    /// scenes instead of assumptions. Trace-only, capped.
+    /// </summary>
+    private unsafe void MaybeDumpStabilized()
+    {
+        if (_trace is null || _traceDumps >= TraceDumpCap || _ocrPasses % TraceDumpEveryPasses != 0) return;
+        try
+        {
+            var w = _stabilizer.Width;
+            var h = _stabilizer.Height;
+            using var bmp = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+            var data = bmp.LockBits(new Rectangle(0, 0, w, h),
+                System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+            fixed (byte* src = _stabilizer.Stabilized)
+            {
+                for (var y = 0; y < h; y++)
+                    Buffer.MemoryCopy(src + y * w * 4, (byte*)data.Scan0 + y * data.Stride, w * 4, w * 4);
+            }
+            bmp.UnlockBits(data);
+            var path = Path.Combine(_traceDir!, $"{_tracePrefix}-pass{_ocrPasses:D6}.png");
+            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            _traceDumps++;
+            Trace($"dump  {Path.GetFileName(path)}");
+        }
+        catch
+        {
+            // A failed snapshot must never take the watcher down.
+        }
     }
 
     public async Task StartAsync()
@@ -225,6 +265,7 @@ public sealed class LootWatcher : IDisposable
 
             if (_lastOcrImage.Length != length) _lastOcrImage = new byte[length];
             _stabilizer.Stabilized.AsSpan(0, length).CopyTo(_lastOcrImage);
+            MaybeDumpStabilized();
             FillOcrInput();
             release = false; // RecognizeAsync owns the flag now
             _ = RecognizeAsync();
