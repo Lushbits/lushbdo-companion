@@ -68,6 +68,14 @@ public static class LootParser
         @"^\.?\s*\(\d{1,2}:\d{2}\)\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // A whole line's ending — a count and/or timestamp. A real mid-name wrap
+    // fragment never carries one: the tail lives on the next visual line. A
+    // fragment that ends like this is a complete line whose `]` misread
+    // (`)` observed in the field), and no wrap at all.
+    private static readonly Regex WholeLineTail = new(
+        @"(?:[xX×\*]\s?\d[\d,]*\s*\.?\s*(?:\(\d{1,2}:\d{2}\))?|\(\d{1,2}:\d{2}\))\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public static Reading Parse(string line)
     {
         var text = Normalize(line);
@@ -116,8 +124,13 @@ public static class LootParser
         if (close < 0)
         {
             // Wrapped mid-name: the line ends inside the bracket and the
-            // rest arrives as a NameTail on the next visual line.
-            return new Reading(Kind.NameOpen, rest[(open + 1)..].Trim(), 0);
+            // rest arrives as a NameTail on the next visual line — unless
+            // the fragment ends like a whole line, which means the `]`
+            // misread and nothing wrapped.
+            var fragment = rest[(open + 1)..].Trim();
+            if (fragment.Length == 0 || WholeLineTail.IsMatch(fragment))
+                return new Reading(Kind.Unrecognized, "", 0);
+            return new Reading(Kind.NameOpen, fragment, 0);
         }
 
         var name = rest[(open + 1)..close].Trim();

@@ -16,7 +16,10 @@ namespace LushbdoCompanion;
 /// text carries one text's worth of vote no matter how many places it shows:
 /// burst loot is near-identical (same items, same counts, same minute) and
 /// its duplicate matches are periodic — unnormalized, they out-vote the few
-/// unique lines that pin the true shift.
+/// unique lines that pin the true shift. And when the full vote reads as
+/// backwards anyway — identical lines stacked a row apart vote coherently
+/// for their own spacing — the texts that cannot alias, visible exactly once
+/// and tracked exactly once, arbitrate.
 ///
 /// Emission is gated by reading consensus: nothing is ever sent on one
 /// frame's word. A tracker emits once, when some parseable reading has
@@ -110,23 +113,33 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         {
             dy = 0;
         }
-        else if (VoteScroll(lines) is { } voted)
+        else if (VoteScroll(lines) is var (full, uniqueVote) && full is { } voted)
         {
             _nullPasses = 0;
             dy = voted;
             if (dy > _lineHeight)
             {
                 // Content moved DOWN: the member scrolled the tab backwards —
-                // or a loot burst's duplicate votes faked it for one pass. A
-                // real backwards scroll keeps voting backwards because the
-                // board holds still; a burst moves on. So hold — match
-                // nothing, emit nothing — and realign only when a second
-                // fresh read agrees: everything "revealed" below is then old
-                // lines we already counted, indistinguishable from new ones —
-                // realign rather than repeat.
-                if (fresh && ++_backwardsPasses >= BackwardsPassesBeforeReset)
-                    ResetForRealign("the chat scrolled backwards");
-                return;
+                // or identical burst lines stacked a row apart voted
+                // coherently for their own spacing (field log, 20:58:35: the
+                // seal burst two-struck the persistence gate). Only the
+                // texts that cannot alias — visible exactly once, matching
+                // exactly one tracker — get a say now.
+                if (uniqueVote is not { } unique)
+                    return; // nothing unambiguous to ask — hold fire, no strike
+                if (unique > _lineHeight)
+                {
+                    // The unambiguous lines agree it moved down. Believe it
+                    // when it persists — the board held still, so a real
+                    // backwards scroll votes backwards again next pass; a
+                    // burst moves on. Then everything "revealed" below is
+                    // old lines we already counted, indistinguishable from
+                    // new ones — realign rather than repeat.
+                    if (fresh && ++_backwardsPasses >= BackwardsPassesBeforeReset)
+                        ResetForRealign("the chat scrolled backwards");
+                    return;
+                }
+                dy = unique; // the duplicates lied; the unique lines pin the true shift
             }
             if (fresh) _backwardsPasses = 0;
         }
@@ -176,14 +189,16 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             note($"Baseline read — the {lines.Count} line(s) already on screen are old; new pickups from here on are counted.");
     }
 
-    private double? VoteScroll(List<OcrLineInput> lines)
+    private (double? Full, double? Unique) VoteScroll(List<OcrLineInput> lines)
     {
         // A text visible k times against m trackers holding it makes k×m
         // pairs, at most one per visible copy true. Splitting each text's
         // vote across its pairs caps every text at one text's worth of say:
         // a burst of near-identical drops casts its duplicate votes at pitch
         // multiples — coherent enough, unnormalized, to out-vote the unique
-        // lines that pin the true shift and read as a backwards scroll.
+        // lines that pin the true shift and read as a backwards scroll. The
+        // texts with exactly one pair cannot alias at all; their vote is
+        // returned separately as the arbiter for backwards-looking results.
         Dictionary<string, int>? pairCounts = null;
         foreach (var line in lines)
         {
@@ -195,22 +210,34 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 pairCounts[line.Text] = n + 1;
             }
         }
-        if (pairCounts is null) return null;
+        if (pairCounts is null) return (null, null);
 
         Dictionary<int, (double Weight, double DySum)> bins = [];
+        Dictionary<int, (double Weight, double DySum)>? uniqueBins = null;
         foreach (var line in lines)
         {
             foreach (var t in _trackers)
             {
                 if (!t.Readings.TryGetValue(line.Text, out var reads)) continue;
-                var weight = (double)reads / pairCounts[line.Text];
+                var pairs = pairCounts[line.Text];
+                var weight = (double)reads / pairs;
                 var dy = line.Y - t.Y;
                 var bin = (int)Math.Round(dy / DyBinPx);
                 bins.TryGetValue(bin, out var acc);
                 bins[bin] = (acc.Weight + weight, acc.DySum + dy * weight);
+                if (pairs == 1)
+                {
+                    uniqueBins ??= [];
+                    uniqueBins.TryGetValue(bin, out var uacc);
+                    uniqueBins[bin] = (uacc.Weight + weight, uacc.DySum + dy * weight);
+                }
             }
         }
+        return (BestBin(bins), uniqueBins is null ? null : BestBin(uniqueBins));
+    }
 
+    private static double? BestBin(Dictionary<int, (double Weight, double DySum)> bins)
+    {
         var best = default(KeyValuePair<int, (double Weight, double DySum)>);
         foreach (var bin in bins)
         {
