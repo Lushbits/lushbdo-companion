@@ -17,6 +17,8 @@
   <ItemGroup>
     <Compile Include="..\LushbdoCompanion\LootParser.cs" Link="app\LootParser.cs" />
     <Compile Include="..\LushbdoCompanion\TextKeyer.cs" Link="app\TextKeyer.cs" />
+    <Compile Include="..\LushbdoCompanion\LineBoard.cs" Link="app\LineBoard.cs" />
+    <Compile Include="..\LushbdoCompanion\OcrRows.cs" Link="app\OcrRows.cs" />
   </ItemGroup>
 
   <ItemGroup>
