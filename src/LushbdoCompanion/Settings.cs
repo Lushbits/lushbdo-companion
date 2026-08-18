@@ -16,6 +16,9 @@ public sealed class Settings
     public string BaseUrl { get; set; } = "https://lushbdo.com";
     public string TokenProtected { get; set; } = "";
 
+    /// <summary>Opt-in OCR diagnostics: raw per-pass lines and board decisions, written next to this file.</summary>
+    public bool TraceOcr { get; set; }
+
     // The loot-chat rectangle from the region picker, in physical pixels
     // relative to the game window's visible top-left — the surface window
     // capture serves. Window-relative on purpose: it survives the game

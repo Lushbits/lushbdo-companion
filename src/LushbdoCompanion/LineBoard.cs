@@ -31,10 +31,20 @@ namespace LushbdoCompanion;
 /// only holds fire — a burst can fake one), a wrapped head whose tail never
 /// arrives is skipped aloud.
 ///
+/// Emission also requires provenance, because the chat is bottom-anchored:
+/// a new line can only ever enter at the bottom, only while content moves
+/// up, and only as many lines as the content moved. The game fades an idle
+/// chat, OCR goes blind, and the un-fade makes old rows "appear" mid-screen
+/// over whatever crippled baseline the blind spell left behind (field log,
+/// 21:15:32: an already-sent ×3 re-emitted exactly this way — the one
+/// forbidden outcome). So: a blank read never completes a baseline, and a
+/// tracker born anywhere but the moving bottom edge is born old — visible
+/// in the log, never counted.
+///
 /// Single-threaded by contract: the watcher's one-OCR-in-flight gate is the
 /// lock.
 /// </summary>
-public sealed class LineBoard(Action<string, int, string> emit, Action<string> note)
+public sealed class LineBoard(Action<string, int, string> emit, Action<string> note, Action<string>? trace = null)
 {
     /// <summary>A parseable reading must recur this many times before it is believed.</summary>
     public const int ConsensusReads = 2;
@@ -103,17 +113,22 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             return;
         }
 
+        if (_trackers.Count == 0)
+        {
+            // Everything the board knew has left the screen; there is no
+            // content to measure new arrivals against. Re-anchor: what is
+            // visible now is old.
+            AdoptBaseline(lines);
+            return;
+        }
+
         // How far did the chat scroll since last pass? Every exact text match
         // between a visible line and a tracker's readings votes for the shift
         // that would explain it; the weighted mode wins. Identical repeated
         // lines vote for several shifts, but every *other* stable line votes
         // only for the true one.
         double dy;
-        if (_trackers.Count == 0)
-        {
-            dy = 0;
-        }
-        else if (VoteScroll(lines) is var (full, uniqueVote) && full is { } voted)
+        if (VoteScroll(lines) is var (full, uniqueVote) && full is { } voted)
         {
             _nullPasses = 0;
             dy = voted;
@@ -126,7 +141,10 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 // texts that cannot alias — visible exactly once, matching
                 // exactly one tracker — get a say now.
                 if (uniqueVote is not { } unique)
+                {
+                    trace?.Invoke($"vote  full {voted:F1} looks backwards, nothing unique to ask — holding");
                     return; // nothing unambiguous to ask — hold fire, no strike
+                }
                 if (unique > _lineHeight)
                 {
                     // The unambiguous lines agree it moved down. Believe it
@@ -135,6 +153,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                     // burst moves on. Then everything "revealed" below is
                     // old lines we already counted, indistinguishable from
                     // new ones — realign rather than repeat.
+                    trace?.Invoke($"vote  full {voted:F1}, unique {unique:F1} — backwards strike {_backwardsPasses + (fresh ? 1 : 0)}");
                     if (fresh && ++_backwardsPasses >= BackwardsPassesBeforeReset)
                         ResetForRealign("the chat scrolled backwards");
                     return;
@@ -142,6 +161,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 dy = unique; // the duplicates lied; the unique lines pin the true shift
             }
             if (fresh) _backwardsPasses = 0;
+            trace?.Invoke($"vote  dy {dy:F1} (full {voted:F1}{(uniqueVote is { } uv ? $", unique {uv:F1}" : "")}), {_trackers.Count} tracker(s)");
         }
         else if (_trackers.TrueForAll(t => !t.Emitted))
         {
@@ -149,10 +169,12 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             // yet either — a positional guess cannot double-count what was
             // never counted. Assume no scroll, so a brand-new line whose
             // first reading was a mangle can still pool toward consensus.
+            trace?.Invoke("vote  nothing matched, nothing emitted yet — assuming still");
             dy = 0;
         }
         else
         {
+            trace?.Invoke($"vote  nothing matched — blind pass {_nullPasses + 1}/{NullPassesBeforeReset}");
             if (++_nullPasses >= NullPassesBeforeReset)
                 ResetForRealign("the chat stopped reading recognizably");
             return;
@@ -164,7 +186,16 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             t.MatchedThisPass = false;
         }
 
-        MatchAndTrack(lines);
+        // Provenance for anything about to be tracked as new: the chat is
+        // bottom-anchored, so genuinely new lines enter at the bottom edge,
+        // below everything already tracked — and there can only be as many
+        // of them as the content just moved up. Lines that "appear" anywhere
+        // else are old content revealing itself (the idle chat un-fading is
+        // the field case) and are born already-counted.
+        var bottom = _trackers[^1].Y; // trackers stay Y-sorted; shifted in lockstep above
+        var newBudget = dy < 0 ? (int)Math.Round(-dy / MedianRowPitch(lines)) : 0;
+
+        MatchAndTrack(lines, bottom, newBudget);
         DropDepartedTrackers();
         if (_trackers.Count > MaxTrackers)
         {
@@ -177,6 +208,11 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
 
     private void AdoptBaseline(List<OcrLineInput> lines)
     {
+        // A blank read anchors nothing: whatever appears after it (an idle
+        // chat un-fading, a loading screen lifting) is old content revealing
+        // itself, not pickups. Wait for a read with content to baseline on.
+        if (lines.Count == 0) return;
+
         foreach (var line in lines)
         {
             var t = new Tracker { Y = line.Y, Emitted = true };
@@ -185,8 +221,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         }
         _baselinePending = false;
         _nullPasses = 0;
-        if (lines.Count > 0)
-            note($"Baseline read — the {lines.Count} line(s) already on screen are old; new pickups from here on are counted.");
+        note($"Baseline read — the {lines.Count} line(s) already on screen are old; new pickups from here on are counted.");
     }
 
     private (double? Full, double? Unique) VoteScroll(List<OcrLineInput> lines)
@@ -251,9 +286,10 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         return best.Value.Weight == 0 ? null : best.Value.DySum / best.Value.Weight;
     }
 
-    private void MatchAndTrack(List<OcrLineInput> lines)
+    private void MatchAndTrack(List<OcrLineInput> lines, double bottom, int newBudget)
     {
         var tolerance = 0.6 * _lineHeight;
+        List<OcrLineInput>? unmatched = null;
         foreach (var line in lines)
         {
             Tracker? nearest = null;
@@ -278,13 +314,50 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             }
             else
             {
-                var t = new Tracker { Y = line.Y };
+                (unmatched ??= []).Add(line);
+            }
+        }
+
+        if (unmatched is not null)
+        {
+            // Bottom-most first: when the budget and the arrivals disagree,
+            // the rows nearest the bottom edge are the arrivals.
+            unmatched.Sort((a, b) => b.Y.CompareTo(a.Y));
+            var bornOld = 0;
+            foreach (var line in unmatched)
+            {
+                var isNew = newBudget > 0 && line.Y >= bottom - 0.5 * _lineHeight;
+                if (isNew) newBudget--;
+                else bornOld++;
+                var t = new Tracker { Y = line.Y, Emitted = !isNew };
                 t.Readings[line.Text] = 1;
                 t.MatchedThisPass = true;
                 _trackers.Add(t);
             }
+            if (bornOld > 0)
+                note($"skip  {bornOld} line(s) appeared without the chat scrolling under them — old content revealed, not pickups");
         }
+
         _trackers.Sort((a, b) => a.Y.CompareTo(b.Y));
+    }
+
+    /// <summary>
+    /// The visual row pitch, measured from this pass's own line positions —
+    /// the gap between adjacent rows, which the glyph height only
+    /// approximates. Same-row fragments (the icon column splitting off) are
+    /// filtered out before the median.
+    /// </summary>
+    private double MedianRowPitch(List<OcrLineInput> lines)
+    {
+        List<double>? gaps = null;
+        for (var i = 1; i < lines.Count; i++)
+        {
+            var gap = lines[i].Y - lines[i - 1].Y;
+            if (gap >= 0.5 * _lineHeight) (gaps ??= []).Add(gap);
+        }
+        if (gaps is null) return _lineHeight;
+        gaps.Sort();
+        return gaps[gaps.Count / 2];
     }
 
     private static void AddReading(Tracker t, string text)

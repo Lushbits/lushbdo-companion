@@ -37,13 +37,13 @@ public class LineBoardTests
     [Fact]
     public void ANewLineEmitsOnceAfterItsReadingRecurs()
     {
-        Pass(); // empty baseline
-        Pass((RoughStone, 100));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 82), (RoughStone, 100)); // the chat scrolls up; the pickup enters at the bottom
         Assert.Empty(_emitted); // one frame's word is never enough
-        Pass((RoughStone, 100));
+        Pass((Weeds, 82), (RoughStone, 100));
         Assert.Equal([("Rough Stone", 1, RoughStone)], _emitted);
-        Pass((RoughStone, 100));
-        Pass((RoughStone, 100));
+        Pass((Weeds, 82), (RoughStone, 100));
+        Pass((Weeds, 82), (RoughStone, 100));
         Assert.Single(_emitted); // settled means done — no re-emission, ever
     }
 
@@ -51,9 +51,9 @@ public class LineBoardTests
     public void IdenticalAdjacentLinesAreDistinctPickups()
     {
         // The exact case content-based dedup can never solve (bdo#581).
-        Pass();
-        Pass((RoughStone, 100), (RoughStone, 120));
-        Pass((RoughStone, 100), (RoughStone, 120));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 60), (RoughStone, 80), (RoughStone, 100)); // two identical drops in one gulp
+        Pass((Weeds, 60), (RoughStone, 80), (RoughStone, 100));
         Assert.Equal(2, _emitted.Count);
         Assert.All(_emitted, e => Assert.Equal("Rough Stone", e.Name));
     }
@@ -71,8 +71,8 @@ public class LineBoardTests
     [Fact]
     public void ReconfirmSettlesALineWithoutASecondOcrPass()
     {
-        Pass();
-        Pass((RoughStone, 100));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 82), (RoughStone, 100));
         _board.Reconfirm(); // stabilized image unchanged → the reading holds
         Assert.Equal([("Rough Stone", 1, RoughStone)], _emitted);
         _board.Reconfirm();
@@ -82,10 +82,10 @@ public class LineBoardTests
     [Fact]
     public void MisreadsLoseTheVoteToTheRecurringTruth()
     {
-        Pass();
-        Pass(("You have obtajned [Rough 5tone]. (18:44)", 100)); // a mangled frame
-        Pass((RoughStone, 100));
-        Pass((RoughStone, 100));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 82), ("You have obtajned [Rough 5tone]. (18:44)", 100)); // a mangled frame
+        Pass((Weeds, 82), (RoughStone, 100));
+        Pass((Weeds, 82), (RoughStone, 100));
         Assert.Equal([("Rough Stone", 1, RoughStone)], _emitted);
     }
 
@@ -94,9 +94,9 @@ public class LineBoardTests
     {
         const string head = "You have obtained [Secret Book of the Forgotten Adventurer]";
         const string tail = "x4. (18:51)";
-        Pass();
-        Pass((head, 100), (tail, 118));
-        Pass((head, 100), (tail, 118));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 64), (head, 82), (tail, 100)); // the wrapped pickup is two visual rows
+        Pass((Weeds, 64), (head, 82), (tail, 100));
         var e = Assert.Single(_emitted);
         Assert.Equal("Secret Book of the Forgotten Adventurer", e.Name);
         Assert.Equal(4, e.Count);
@@ -106,9 +106,9 @@ public class LineBoardTests
     public void WrappedTimestampTailIsConsumedSilently()
     {
         const string head = "You have obtained e [Concentrated Magical Black Gem] x100.";
-        Pass();
-        Pass((head, 100), ("(19:33)", 118));
-        Pass((head, 100), ("(19:33)", 118));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 64), (head, 82), ("(19:33)", 100));
+        Pass((Weeds, 64), (head, 82), ("(19:33)", 100));
         var e = Assert.Single(_emitted);
         Assert.Equal("Concentrated Magical Black Gem", e.Name);
         Assert.Equal(100, e.Count);
@@ -119,9 +119,9 @@ public class LineBoardTests
     public void SilverIsSkippedAloudNotSent()
     {
         const string silver = "You have obtained [Silver] x995,374. (19:00)";
-        Pass();
-        Pass((silver, 100));
-        Pass((silver, 100));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 82), (silver, 100));
+        Pass((Weeds, 82), (silver, 100));
         Assert.Empty(_emitted);
         Assert.Contains(_notes, n => n.Contains("silver"));
     }
@@ -130,8 +130,8 @@ public class LineBoardTests
     public void UnparseableLinesAreSkippedAloudWhenTheyLeave()
     {
         Pass((RoughStone, 100)); // baseline anchor keeps alignment alive
-        Pass((RoughStone, 100), ("Guildmate: hello there", 120));
-        for (var i = 0; i < 7; i++) Pass((RoughStone, 100)); // the chat line fades out
+        Pass((RoughStone, 82), ("Guildmate: hello there", 100));
+        for (var i = 0; i < 7; i++) Pass((RoughStone, 82)); // the chat line fades out
         Assert.Empty(_emitted);
         Assert.Contains(_notes, n => n.Contains("Guildmate") && n.Contains("skip"));
     }
@@ -178,10 +178,11 @@ public class LineBoardTests
         Pass((RoughStone, 40));
         Pass((RoughStone, 90)); // one pass says everything moved down…
         Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
-        // …but the next read is back where the board left it, plus a pickup.
-        // A held board resumes exactly where it was; nothing was dumped.
-        Pass((RoughStone, 40), (Weeds, 60));
-        Pass((RoughStone, 40), (Weeds, 60));
+        // …but the next read scrolls on from where the board left it, with a
+        // pickup entering at the bottom. A held board resumes; nothing was
+        // dumped.
+        Pass((RoughStone, 22), (Weeds, 40));
+        Pass((RoughStone, 22), (Weeds, 40));
         Assert.Equal([("Weeds", 3, Weeds)], _emitted);
         Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
     }
@@ -269,9 +270,9 @@ public class LineBoardTests
         // the head never closes it and the rest arrives as the next line.
         const string head = "You have obtained [Deep Tide-Dyed Standardized Timber";
         const string tail = "Square] x4. (20:25)";
-        Pass();
-        Pass((head, 100), (tail, 118));
-        Pass((head, 100), (tail, 118));
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 64), (head, 82), (tail, 100));
+        Pass((Weeds, 64), (head, 82), (tail, 100));
         var e = Assert.Single(_emitted);
         Assert.Equal("Deep Tide-Dyed Standardized Timber Square", e.Name);
         Assert.Equal(4, e.Count);
@@ -281,10 +282,11 @@ public class LineBoardTests
     public void AWrappedNameWhoseEndingNeverArrivesIsSkippedAloud()
     {
         const string head = "You have obtained [Deep Tide-Dyed Standardized Timber";
-        Pass();
-        Pass((head, 100), (Weeds, 120)); // the next line is a full message, not the name's rest
-        Pass((head, 100), (Weeds, 120));
-        Assert.Equal([("Weeds", 3, Weeds)], _emitted);
+        const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 64), (head, 82), (salt, 100)); // the next line is a full message, not the name's rest
+        Pass((Weeds, 64), (head, 82), (salt, 100));
+        Assert.Equal([("Rock Salt Ingot", 2, salt)], _emitted);
         Assert.Contains(_notes, n => n.Contains("ending never arrived"));
     }
 
@@ -292,10 +294,64 @@ public class LineBoardTests
     public void AWrappedHeadWhoseTailNeverArrivesIsSkippedAloud()
     {
         const string head = "You have obtained [Secret Book of the Forgotten Adventurer]";
-        Pass();
-        Pass((head, 100), (Weeds, 120)); // the next line is a full message, not a tail
-        Pass((head, 100), (Weeds, 120));
-        Assert.Equal([("Weeds", 3, Weeds)], _emitted);
+        const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
+        Pass((Weeds, 100)); // baseline anchor
+        Pass((Weeds, 64), (head, 82), (salt, 100)); // the next line is a full message, not a tail
+        Pass((Weeds, 64), (head, 82), (salt, 100));
+        Assert.Equal([("Rock Salt Ingot", 2, salt)], _emitted);
         Assert.Contains(_notes, n => n.Contains("quantity never arrived"));
+    }
+
+    [Fact]
+    public void AnUnfadeRevealingOldLinesNeverReEmitsThem()
+    {
+        // The game fades an idle chat; OCR goes blind; a realign re-baselines
+        // on whatever fragments stay readable. When loot un-fades the chat,
+        // the old rows materialize mid-screen without anything scrolling —
+        // and must never count again (field log, 21:15:32 and 21:17:05: the
+        // same ×3 row was sent three times this way).
+        const string oldA = "You have obtained [Sea Monster's Ooze] x36. (20:57)";
+        const string oldB = "You have obtained [Cox Pirates Extermination Seal] x3. (21:13)";
+        Pass((RoughStone, 60), (Weeds, 80)); // the crippled baseline: what a faded screen still reads as
+        Pass((RoughStone, 60), (Weeds, 80));
+        // The chat un-fades: old rows appear above and below; nothing scrolls.
+        Pass((oldA, 20), (oldB, 40), (RoughStone, 60), (Weeds, 80), (oldB, 100), (oldA, 120));
+        Pass((oldA, 20), (oldB, 40), (RoughStone, 60), (Weeds, 80), (oldB, 100), (oldA, 120));
+        Pass((oldA, 20), (oldB, 40), (RoughStone, 60), (Weeds, 80), (oldB, 100), (oldA, 120));
+        Assert.Empty(_emitted);
+        Assert.Contains(_notes, n => n.Contains("revealed"));
+    }
+
+    [Fact]
+    public void ARevealBeneathTheBottomCannotRideAnArrival()
+    {
+        // A crippled baseline can miss the bottom rows too. When a real
+        // pickup then arrives — content moves up one row — the reveal below
+        // the old bottom must not slip in with it: one row of scroll admits
+        // exactly one new line, the bottom-most.
+        const string oldB = "You have obtained [Cox Pirates Extermination Seal] x3. (21:13)";
+        Pass((RoughStone, 40), (Weeds, 60)); // baseline: the readable top of a fading screen
+        Pass((RoughStone, 40), (Weeds, 60));
+        // One real pickup enters at the bottom (everything shifts up 20) and
+        // the un-fade reveals two old rows beneath the old bottom edge.
+        Pass((RoughStone, 20), (Weeds, 40), (oldB, 60), (oldB, 80), (RoughStone, 100));
+        Pass((RoughStone, 20), (Weeds, 40), (oldB, 60), (oldB, 80), (RoughStone, 100));
+        var e = Assert.Single(_emitted);
+        Assert.Equal("Rough Stone", e.Name); // the bottom-most line is the arrival
+        Assert.Contains(_notes, n => n.Contains("revealed"));
+    }
+
+    [Fact]
+    public void ABlankReadNeverCompletesABaseline()
+    {
+        // A fully faded chat (or a loading screen) reads as nothing. Nothing
+        // is no anchor: what appears afterwards is old content revealing
+        // itself, and the baseline waits for it.
+        Pass(); // OCR read nothing
+        Pass((RoughStone, 82), (Weeds, 100)); // content appears: old, not pickups
+        Pass((RoughStone, 82), (Weeds, 100));
+        Pass((RoughStone, 82), (Weeds, 100));
+        Assert.Empty(_emitted);
+        Assert.Contains(_notes, n => n.Contains("Baseline"));
     }
 }

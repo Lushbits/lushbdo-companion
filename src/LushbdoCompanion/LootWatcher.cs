@@ -53,6 +53,8 @@ public sealed class LootWatcher : IDisposable
     private SoftwareBitmap? _ocrInput; // allocated once, refilled per OCR pass
     private Size _ocrInputSize;
     private byte[] _lastOcrImage = [];
+    private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
+    private readonly object _traceLock = new();
     private long _framesCaptured;
     private long _ocrPasses;
     private long _pickups;
@@ -70,7 +72,59 @@ public sealed class LootWatcher : IDisposable
         _log = log;
         _onLoot = onLoot;
         _source = source ?? new WgcFrameSource();
-        _board = new LineBoard(OnConfirmedPickup, OnBoardNote);
+        _board = new LineBoard(OnConfirmedPickup, OnBoardNote, Trace);
+    }
+
+    /// <summary>
+    /// Opt-in diagnostics: every OCR pass's raw lines and every board
+    /// decision, written to a file so "did it see that row?" is a lookup,
+    /// not an inference. Off, it costs one null check per event.
+    /// </summary>
+    public void SetTracing(bool on)
+    {
+        lock (_traceLock)
+        {
+            if (on == (_trace is not null)) return;
+            if (!on)
+            {
+                _trace!.Dispose();
+                _trace = null;
+                _log("OCR trace stopped.");
+                return;
+            }
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lushbdo-companion");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"trace-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+            _trace = new StreamWriter(path) { AutoFlush = true };
+            _log($"OCR trace started: {path}");
+        }
+    }
+
+    private void Trace(string message)
+    {
+        if (_trace is null) return;
+        lock (_traceLock)
+        {
+            _trace?.WriteLine($"{DateTime.Now:HH:mm:ss.f}  {message}");
+        }
+    }
+
+    private void TracePass(List<LineBoard.OcrLineInput> lines)
+    {
+        if (_trace is null) return;
+        lock (_traceLock)
+        {
+            if (_trace is null) return;
+            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  --- pass {_ocrPasses} — {lines.Count} line(s)");
+            foreach (var l in lines)
+                _trace.WriteLine($"             y={l.Y,6:F1} h={l.Height,4:F1}  \"{l.Text}\"");
+        }
+    }
+
+    private void Log(string message)
+    {
+        _log(message);
+        if (_trace is not null) Trace("log   " + message);
     }
 
     public async Task StartAsync()
@@ -85,7 +139,7 @@ public sealed class LootWatcher : IDisposable
 
         _source.Tick += OnTick;
         _source.Failed += OnFailed;
-        _source.Status += _log;
+        _source.Status += Log;
         await _source.StartAsync(_region, FramePace);
     }
 
@@ -113,7 +167,7 @@ public sealed class LootWatcher : IDisposable
             }
             if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
-                _log(_framesCaptured == 0
+                Log(_framesCaptured == 0
                     ? "Still here — no game window captured yet."
                     : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed.");
                 _sinceLastLogged.Restart();
@@ -131,9 +185,9 @@ public sealed class LootWatcher : IDisposable
         if (!_announced)
         {
             _announced = true;
-            _log($"Capture is live: {frame.Width}×{frame.Height}px region, OCR in {_ocr!.RecognizerLanguage.DisplayName}" +
-                 (_scale > 1 ? $" at {_scale}× upscale" : "") +
-                 $" — stabilizing over {FrameStabilizer.Depth} frames before the first read.");
+            Log($"Capture is live: {frame.Width}×{frame.Height}px region, OCR in {_ocr!.RecognizerLanguage.DisplayName}" +
+                (_scale > 1 ? $" at {_scale}× upscale" : "") +
+                $" — stabilizing over {FrameStabilizer.Depth} frames before the first read.");
             _sinceLastLogged.Restart();
         }
 
@@ -164,6 +218,7 @@ public sealed class LootWatcher : IDisposable
                 // The stabilized text did not change; the last readings hold
                 // for another tick. This is what settles a line while the
                 // scene is still — and what keeps an idle chat nearly free.
+                if (_trace is not null) Trace("gate  stabilized image unchanged — reconfirming previous readings");
                 _board.Reconfirm();
                 return;
             }
@@ -232,6 +287,7 @@ public sealed class LootWatcher : IDisposable
                 }
                 lines.Add(new LineBoard.OcrLineInput(text, top / _scale, (bottom - top) / _scale));
             }
+            TracePass(lines);
             _board.Ingest(lines);
         }
         catch (Exception e)
@@ -247,14 +303,14 @@ public sealed class LootWatcher : IDisposable
     private void OnConfirmedPickup(string name, int count, string settledReading)
     {
         _pickups++;
-        _log($"loot  \"{settledReading}\" → {name} ×{count}");
+        Log($"loot  \"{settledReading}\" → {name} ×{count}");
         _onLoot?.Invoke(name, count);
         _sinceLastLogged.Restart();
     }
 
     private void OnBoardNote(string message)
     {
-        _log(message);
+        Log(message);
         _sinceLastLogged.Restart();
     }
 
@@ -263,7 +319,7 @@ public sealed class LootWatcher : IDisposable
         // One failure can repeat every tick; say it once, not twice a second.
         if (_disposed || e.Message == _lastFailure) return;
         _lastFailure = e.Message;
-        _log($"A frame could not be read: {e.Message}");
+        Log($"A frame could not be read: {e.Message}");
     }
 
     /// <summary>
@@ -287,8 +343,13 @@ public sealed class LootWatcher : IDisposable
         _disposed = true;
         _source.Tick -= OnTick;
         _source.Failed -= OnFailed;
-        _source.Status -= _log;
+        _source.Status -= Log;
         _source.Dispose();
+        lock (_traceLock)
+        {
+            _trace?.Dispose();
+            _trace = null;
+        }
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
             _ocrInput?.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
     }

@@ -15,6 +15,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly LogWindow _log = new();
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
+    private readonly ToolStripMenuItem _traceItem;
     private LootWatcher? _watcher;
     private LootSender? _sender;
     private bool _updateBalloonShown;
@@ -29,6 +30,11 @@ public sealed class TrayContext : ApplicationContext
             Enabled = _settings.Region is not null
         };
 
+        _traceItem = new ToolStripMenuItem("Trace OCR to file", null, (_, _) => ToggleTrace())
+        {
+            Checked = _settings.TraceOcr
+        };
+
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
         menu.Items.Add("Pick loot log region…", null, async (_, _) => await PickRegionAsync());
@@ -37,6 +43,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
+        menu.Items.Add(_traceItem);
         menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
@@ -204,6 +211,7 @@ public sealed class TrayContext : ApplicationContext
 
         _watcher = watcher;
         _sender = sender;
+        if (_settings.TraceOcr) watcher.SetTracing(true);
         _watchItem.Text = "Stop watching";
         _log.Append("Watching the loot log. New pickups are confirmed across frames, then sent to your running gather " +
                     "session in small batches — start one on the site and play.");
@@ -218,6 +226,15 @@ public sealed class TrayContext : ApplicationContext
         _sender = null;
         _watchItem.Text = "Start watching";
         _log.Append(message);
+    }
+
+    private void ToggleTrace()
+    {
+        _settings.TraceOcr = !_settings.TraceOcr;
+        _settings.Save();
+        _traceItem.Checked = _settings.TraceOcr;
+        if (_watcher is not null) _watcher.SetTracing(_settings.TraceOcr);
+        else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
     }
 
     private void ShowSettings()
