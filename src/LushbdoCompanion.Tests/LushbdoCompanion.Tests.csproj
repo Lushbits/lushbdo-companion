@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- The app project is a self-contained WinExe with a pinned RID, which a
+       ProjectReference fights with. The logic under test is pure — parser,
+       median, board — so those sources compile straight into this project
+       instead. Nothing here touches WinRT or WinForms. -->
+  <ItemGroup>
+    <Compile Include="..\LushbdoCompanion\LootParser.cs" Link="app\LootParser.cs" />
+    <Compile Include="..\LushbdoCompanion\LineBoard.cs" Link="app\LineBoard.cs" />
+    <Compile Include="..\LushbdoCompanion\FrameStabilizer.cs" Link="app\FrameStabilizer.cs" />
+    <Compile Include="..\LushbdoCompanion\IFrameSource.cs" Link="app\IFrameSource.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
+    <PackageReference Include="xunit" Version="2.9.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+</Project>

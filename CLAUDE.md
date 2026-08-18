@@ -20,9 +20,12 @@ same ToS class as streaming software. No feature is worth bending them.
   and held lines live there. The app's only UI beyond pairing is its live log
   and (milestone b) the region picker.
 - **Featherweight beside the game.** Gamers notice; no feature is worth frame
-  drops. Capture is sampled (not streamed), cropped on the GPU, OCR runs only
-  when the watched pixels change, steady state allocates nothing, and the
-  process runs below normal priority so the game always wins the CPU.
+  drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
+  background is transparent by design (owner decision, #2), so raw pixels
+  always change — OCR reads a median-stabilized image at half the capture
+  pace, and only when that stabilized image changed. Steady state allocates
+  nothing, and the process runs below normal priority so the game always wins
+  the CPU.
 
 ## The contract
 
@@ -57,6 +60,12 @@ newest release and shows a notice — it never self-updates.
 ## Working loop
 
 Issues #1–#3 are the milestone roadmap ((b) eyes, (c) dedup + live sending,
-(d) polish). Milestone (b) logs OCR lines and deliberately does not send —
-without (c)'s scroll dedup, sending double-counts. Real line shapes are
-enumerated from (b)'s live logging before (c) parses them.
+(d) polish); (b) and (c) have landed. The real line shapes, and the owner
+decisions this build encodes — transparent background is the target, silver
+is skipped app-side, nothing is sent on one frame's word — are recorded in
+#2's comments. Dedup keys line identity on position in the scroll stream
+(text-anchored, voted across OCR passes), and every ambiguity resolves the
+same direction: a visible undercount, never a double count. Logic that can
+run without Windows (parser, median, board) is link-compiled into
+`src/LushbdoCompanion.Tests`; `dotnet test src/LushbdoCompanion.Tests` runs
+it.

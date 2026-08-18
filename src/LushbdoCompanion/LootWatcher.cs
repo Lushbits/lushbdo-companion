@@ -8,47 +8,69 @@ using WinRT;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The eyes: region pixels arrive from an IFrameSource cut out of the game
-/// window itself, get compared against the previous frame, and only when they
-/// actually changed are they upscaled and OCR'd — a static chat costs one
-/// vectorized memory compare per tick and nothing else, which is what lets
-/// this sit beside a running game. The source owns the game window's
-/// lifecycle (waiting for it, re-finding it after a restart); this class only
-/// reads. Every line read is printed to the log. Milestone (b) deliberately
-/// stops there — the same lines stay on screen across frames, so sending them
-/// before milestone (c)'s scroll dedup would double-count massively.
+/// The eyes, milestone (c) shape: region pixels arrive from an IFrameSource
+/// cut out of the game window itself into a five-frame ring; OCR reads the
+/// per-pixel median of that ring, never a raw frame, so static chat glyphs
+/// stay sharp while the transparent background's animation smears away (#2).
+/// "Did the pixels change" is no longer a meaningful gate — the world behind
+/// the text always changes — so the gate moved up a level: OCR runs at half
+/// the frame pace and only when the *stabilized* image changed; when it did
+/// not, the previous pass's readings are reconfirmed to the board for free.
+/// The LineBoard decides what is genuinely new and hands confirmed pickups to
+/// the sender; nothing is ever sent on one frame's word. The source owns the
+/// game window's lifecycle (waiting for it, re-finding it after a restart);
+/// this class only reads — but a gap in frames means the game went away, so
+/// what follows one is a fresh ring and a fresh baseline, never a median of
+/// two different worlds.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
     /// <summary>~2 fps: a scrolling loot line is on screen for seconds; sampling twice a second cannot miss it.</summary>
     private static readonly TimeSpan FramePace = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>OCR considers running every other tick — reading at 1 Hz, which still gives a line many readings before it scrolls.</summary>
+    private const int OcrEveryTicks = 2;
+
+    /// <summary>Sampled mean-abs-diff below this and the stabilized image counts as unchanged.</summary>
+    private const double StabilizedChangeGate = 3.0;
+
+    /// <summary>This many frameless ticks (~5 s) means the game window is gone, not merely idle.</summary>
+    private const int FrameGapTicks = 10;
+
     /// <summary>A quiet log line this often, so a silent log can only mean capture died.</summary>
     private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromMinutes(2);
 
     private readonly Rectangle _region; // window-relative physical pixels, from the region picker
     private readonly Action<string> _log;
+    private readonly Action<string, int>? _onLoot;
     private readonly IFrameSource _source;
+    private readonly FrameStabilizer _stabilizer = new();
+    private readonly LineBoard _board;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
 
     private OcrEngine? _ocr;
     private int _scale;                // nearest-neighbour upscale — small chat text OCRs far better at 2×
     private SoftwareBitmap? _ocrInput; // allocated once, refilled per OCR pass
-    private byte[] _prevPixels = [];
-    private Size _frameSize;
+    private Size _ocrInputSize;
+    private byte[] _lastOcrImage = [];
     private long _framesCaptured;
     private long _ocrPasses;
+    private long _pickups;
+    private int _tick;
+    private int _nullTicks;
     private int _ocrBusy;
     private bool _announced;
-    private string _lastFrameText = "";
+    private volatile string? _resetReason;
     private string _lastFailure = "";
     private volatile bool _disposed;
 
-    public LootWatcher(Rectangle region, Action<string> log, IFrameSource? source = null)
+    public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null, IFrameSource? source = null)
     {
         _region = region;
         _log = log;
+        _onLoot = onLoot;
         _source = source ?? new WgcFrameSource();
+        _board = new LineBoard(OnConfirmedPickup, OnBoardNote);
     }
 
     public async Task StartAsync()
@@ -72,12 +94,28 @@ public sealed class LootWatcher : IDisposable
         try
         {
             if (_disposed) return;
-            if (tick is { } frame) ReadFrame(frame);
+            if (tick is { } frame)
+            {
+                if (_nullTicks >= FrameGapTicks && _framesCaptured > 0)
+                {
+                    // The game went away and came back (restart, minimize).
+                    // The ring must not median two different worlds, and
+                    // whatever the chat shows now may already be counted.
+                    _stabilizer.Clear();
+                    _resetReason = "the game window was gone for a while";
+                }
+                _nullTicks = 0;
+                ReadFrame(frame);
+            }
+            else
+            {
+                _nullTicks++;
+            }
             if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
                 _log(_framesCaptured == 0
                     ? "Still here — no game window captured yet."
-                    : $"Still watching — {_framesCaptured} frames captured, {_ocrPasses} OCR passes, nothing new on screen.");
+                    : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed.");
                 _sinceLastLogged.Restart();
             }
         }
@@ -94,47 +132,77 @@ public sealed class LootWatcher : IDisposable
         {
             _announced = true;
             _log($"Capture is live: {frame.Width}×{frame.Height}px region, OCR in {_ocr!.RecognizerLanguage.DisplayName}" +
-                 (_scale > 1 ? $" at {_scale}× upscale." : "."));
+                 (_scale > 1 ? $" at {_scale}× upscale" : "") +
+                 $" — stabilizing over {FrameStabilizer.Depth} frames before the first read.");
             _sinceLastLogged.Restart();
         }
 
-        // The gate that keeps this featherweight: OCR only runs when the chat
-        // pixels actually changed.
-        var size = new Size(frame.Width, frame.Height);
-        var pixels = frame.Pixels.AsSpan(0, frame.Width * frame.Height * 4);
-        if (size == _frameSize && pixels.SequenceEqual(_prevPixels)) return;
+        if (_stabilizer.Add(frame))
+            _resetReason ??= "the watched region resized"; // everything visible next is old
 
-        // One OCR pass in flight, ever. A change landing mid-pass is not
-        // recorded as seen, so the next tick picks it up.
+        // OCR at half the frame pace: the ring smooths over 2.5 s anyway, and
+        // a loot line is on screen for far longer than a second.
+        if (++_tick % OcrEveryTicks != 0) return;
+
+        // One OCR pass in flight, ever. The busy flag is also the lock around
+        // the board and the OCR input bitmap.
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) != 0) return;
-
-        if (size != _frameSize)
+        var release = true;
+        try
         {
-            _frameSize = size;
-            _prevPixels = new byte[pixels.Length];
-            _ocrInput?.Dispose();
-            _ocrInput = new SoftwareBitmap(BitmapPixelFormat.Bgra8, size.Width * _scale, size.Height * _scale, BitmapAlphaMode.Ignore);
+            if (_resetReason is { } reason)
+            {
+                _resetReason = null;
+                _board.Reset(reason);
+            }
+            if (!_stabilizer.Stabilize()) return; // ring still warming up
+
+            var length = _stabilizer.Width * _stabilizer.Height * 4;
+            if (_lastOcrImage.Length == length &&
+                FrameStabilizer.MeanAbsDiff(_stabilizer.Stabilized, _lastOcrImage, length) < StabilizedChangeGate)
+            {
+                // The stabilized text did not change; the last readings hold
+                // for another tick. This is what settles a line while the
+                // scene is still — and what keeps an idle chat nearly free.
+                _board.Reconfirm();
+                return;
+            }
+
+            if (_lastOcrImage.Length != length) _lastOcrImage = new byte[length];
+            _stabilizer.Stabilized.AsSpan(0, length).CopyTo(_lastOcrImage);
+            FillOcrInput();
+            release = false; // RecognizeAsync owns the flag now
+            _ = RecognizeAsync();
         }
-        pixels.CopyTo(_prevPixels);
-        FillOcrInput(frame);
-        _ = RecognizeAsync();
+        finally
+        {
+            if (release) Volatile.Write(ref _ocrBusy, 0);
+        }
     }
 
-    private unsafe void FillOcrInput(RegionFrame frame)
+    private unsafe void FillOcrInput()
     {
-        using var buffer = _ocrInput!.LockBuffer(BitmapBufferAccessMode.Write);
+        var size = new Size(_stabilizer.Width, _stabilizer.Height);
+        if (_ocrInput is null || size != _ocrInputSize)
+        {
+            _ocrInput?.Dispose();
+            _ocrInput = new SoftwareBitmap(BitmapPixelFormat.Bgra8, size.Width * _scale, size.Height * _scale, BitmapAlphaMode.Ignore);
+            _ocrInputSize = size;
+        }
+
+        using var buffer = _ocrInput.LockBuffer(BitmapBufferAccessMode.Write);
         using var reference = buffer.CreateReference();
         reference.As<CaptureInterop.IMemoryBufferByteAccess>().GetBuffer(out var dst, out _);
         var desc = buffer.GetPlaneDescription(0);
 
-        fixed (byte* src = frame.Pixels)
+        fixed (byte* src = _stabilizer.Stabilized)
         {
-            var srcStride = frame.Width * 4;
-            for (var y = 0; y < frame.Height * _scale; y++)
+            var srcStride = size.Width * 4;
+            for (var y = 0; y < size.Height * _scale; y++)
             {
                 var srcRow = (uint*)(src + y / _scale * srcStride);
                 var dstRow = (uint*)(dst + desc.StartIndex + y * desc.Stride);
-                for (var x = 0; x < frame.Width * _scale; x++)
+                for (var x = 0; x < size.Width * _scale; x++)
                     dstRow[x] = srcRow[x / _scale];
             }
         }
@@ -148,16 +216,23 @@ public sealed class LootWatcher : IDisposable
             _ocrPasses++;
             if (_disposed) return;
 
-            var lines = result.Lines.Select(l => l.Text.Trim()).Where(t => t.Length > 0).ToArray();
-            var frameText = string.Join("\n", lines);
-            if (frameText == _lastFrameText) return; // pixels moved but the text did not (animations, glow)
-            // Something really changed. Print everything visible — repeats
-            // across frames are expected and are exactly what milestone (c)
-            // will dedup; this stage exists to enumerate real line shapes.
-            _lastFrameText = frameText;
-            foreach (var line in lines)
-                _log($"read  \"{line}\"");
-            _sinceLastLogged.Restart();
+            // Lines go to the board with their vertical position in capture
+            // pixels — position on the scroll stream is identity; the text
+            // alone cannot be (identical lines repeat).
+            var lines = new List<LineBoard.OcrLineInput>(result.Lines.Count);
+            foreach (var line in result.Lines)
+            {
+                var text = line.Text.Trim();
+                if (text.Length == 0 || line.Words.Count == 0) continue;
+                double top = double.MaxValue, bottom = double.MinValue;
+                foreach (var word in line.Words)
+                {
+                    top = Math.Min(top, word.BoundingRect.Y);
+                    bottom = Math.Max(bottom, word.BoundingRect.Y + word.BoundingRect.Height);
+                }
+                lines.Add(new LineBoard.OcrLineInput(text, top / _scale, (bottom - top) / _scale));
+            }
+            _board.Ingest(lines);
         }
         catch (Exception e)
         {
@@ -167,6 +242,20 @@ public sealed class LootWatcher : IDisposable
         {
             Volatile.Write(ref _ocrBusy, 0);
         }
+    }
+
+    private void OnConfirmedPickup(string name, int count, string settledReading)
+    {
+        _pickups++;
+        _log($"loot  \"{settledReading}\" → {name} ×{count}");
+        _onLoot?.Invoke(name, count);
+        _sinceLastLogged.Restart();
+    }
+
+    private void OnBoardNote(string message)
+    {
+        _log(message);
+        _sinceLastLogged.Restart();
     }
 
     private void OnFailed(Exception e)
