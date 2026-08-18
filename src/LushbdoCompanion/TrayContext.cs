@@ -23,6 +23,7 @@ public sealed class TrayContext : ApplicationContext
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
+        menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
         menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
@@ -122,6 +123,9 @@ public sealed class TrayContext : ApplicationContext
 
     private static void OpenReleasesPage() =>
         Process.Start(new ProcessStartInfo(UpdateChecker.ReleasesPage) { UseShellExecute = true });
+
+    private void OpenSite() =>
+        Process.Start(new ProcessStartInfo(_settings.BaseUrl) { UseShellExecute = true });
 
     private void Quit()
     {
