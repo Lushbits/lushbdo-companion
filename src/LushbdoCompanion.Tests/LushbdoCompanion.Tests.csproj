@@ -16,6 +16,7 @@
     <Compile Include="..\LushbdoCompanion\LineBoard.cs" Link="app\LineBoard.cs" />
     <Compile Include="..\LushbdoCompanion\FrameStabilizer.cs" Link="app\FrameStabilizer.cs" />
     <Compile Include="..\LushbdoCompanion\TextKeyer.cs" Link="app\TextKeyer.cs" />
+    <Compile Include="..\LushbdoCompanion\OcrRows.cs" Link="app\OcrRows.cs" />
     <Compile Include="..\LushbdoCompanion\IFrameSource.cs" Link="app\IFrameSource.cs" />
   </ItemGroup>
 

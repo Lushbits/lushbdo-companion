@@ -90,7 +90,7 @@ static async Task<List<string>> ReadRowsAsync(OcrEngine ocr, byte[] bgra, int w,
     using var bmp = SoftwareBitmap.CreateCopyFromBuffer(scaled.AsBuffer(), BitmapPixelFormat.Bgra8, w * 2, h * 2, BitmapAlphaMode.Ignore);
     var result = await ocr.RecognizeAsync(bmp);
 
-    var pieces = new List<(double X, double Y, double H, string Text)>();
+    var pieces = new List<OcrRows.Piece>();
     foreach (var line in result.Lines)
     {
         var text = line.Text.Trim();
@@ -102,25 +102,9 @@ static async Task<List<string>> ReadRowsAsync(OcrEngine ocr, byte[] bgra, int w,
             top = Math.Min(top, word.BoundingRect.Y);
             bottom = Math.Max(bottom, word.BoundingRect.Y + word.BoundingRect.Height);
         }
-        pieces.Add((x, top, bottom - top, text));
+        pieces.Add(new OcrRows.Piece(x, top, bottom - top, text));
     }
-
-    pieces.Sort((a, b) => a.Y.CompareTo(b.Y));
-    var rows = new List<string>();
-    for (var i = 0; i < pieces.Count;)
-    {
-        var bandY = pieces[i].Y;
-        var bandH = Math.Max(pieces[i].H, 8);
-        var band = new List<(double X, string Text)>();
-        while (i < pieces.Count && pieces[i].Y < bandY + 0.6 * bandH)
-        {
-            band.Add((pieces[i].X, pieces[i].Text));
-            i++;
-        }
-        band.Sort((a, b) => a.X.CompareTo(b.X));
-        rows.Add(string.Join(' ', band.Select(p => p.Text)));
-    }
-    return rows;
+    return OcrRows.Merge(pieces).Select(r => r.Text).ToList();
 }
 
 static byte[] Upscale2x(byte[] bgra, int w, int h)

@@ -22,10 +22,11 @@ same ToS class as streaming software. No feature is worth bending them.
 - **Featherweight beside the game.** Gamers notice; no feature is worth frame
   drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
   background is transparent by design (owner decision, #2), so raw pixels
-  always change — OCR reads a median-stabilized image at half the capture
-  pace, and only when that stabilized image changed. Steady state allocates
-  nothing, and the process runs below normal priority so the game always wins
-  the CPU.
+  always change — each frame is text-keyed (bright core with dark outline
+  within reach, the game's own text contract; #18 measured it at 6× the
+  readable rows of the retired temporal median), and OCR runs only when the
+  keyed text changed. Steady state allocates nothing, and the process runs
+  below normal priority so the game always wins the CPU.
 
 ## The contract
 

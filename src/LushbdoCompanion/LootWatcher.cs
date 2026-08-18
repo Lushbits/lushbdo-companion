@@ -8,31 +8,31 @@ using WinRT;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The eyes, milestone (c) shape: region pixels arrive from an IFrameSource
-/// cut out of the game window itself into a five-frame ring; OCR reads the
-/// per-pixel median of that ring, never a raw frame, so static chat glyphs
-/// stay sharp while the transparent background's animation smears away (#2).
-/// "Did the pixels change" is no longer a meaningful gate — the world behind
-/// the text always changes — so the gate moved up a level: OCR runs at half
-/// the frame pace and only when the *stabilized* image changed; when it did
-/// not, the previous pass's readings are reconfirmed to the board for free.
-/// The LineBoard decides what is genuinely new and hands confirmed pickups to
-/// the sender; nothing is ever sent on one frame's word. The source owns the
-/// game window's lifecycle (waiting for it, re-finding it after a restart);
-/// this class only reads — but a gap in frames means the game went away, so
-/// what follows one is a fresh ring and a fresh baseline, never a median of
-/// two different worlds.
+/// The eyes. Region pixels arrive from an IFrameSource cut out of the game
+/// window itself; every frame is keyed by <see cref="TextKeyer"/> — the
+/// game draws chat text as a bright core wrapped in a dark outline so it
+/// reads over anything, and keying keeps exactly that structure and
+/// flattens the animated world to black (#2, #18: measured 6× the readable
+/// rows of the retired temporal median, which smeared text over text the
+/// moment the chat scrolled). Each keyed frame is one crisp scroll state,
+/// OCR reads every frame the keyed text actually changed — at the owner's
+/// real loot pace (5–10 rows a second) a row lives ~2 s, and it needs two
+/// clean reads before it counts — and an unchanged keyed frame reconfirms
+/// the previous readings for free, which is what keeps an idle chat nearly
+/// free. OCR fragments that share a visual row are merged left to right
+/// (keying splits a row at the icon gap); the LineBoard sees whole rows,
+/// decides what is genuinely new, and hands confirmed pickups to the
+/// sender. Nothing is ever sent on one frame's word. The source owns the
+/// game window's lifecycle; a gap in frames means the game went away, and
+/// what follows one is a fresh baseline.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
-    /// <summary>~2 fps: a scrolling loot line is on screen for seconds; sampling twice a second cannot miss it.</summary>
+    /// <summary>~2 fps: at 5–10 rows/s a row crosses a screenful in seconds; every frame is a reading chance.</summary>
     private static readonly TimeSpan FramePace = TimeSpan.FromMilliseconds(500);
 
-    /// <summary>OCR considers running every other tick — reading at 1 Hz, which still gives a line many readings before it scrolls.</summary>
-    private const int OcrEveryTicks = 2;
-
-    /// <summary>Sampled mean-abs-diff below this and the stabilized image counts as unchanged.</summary>
-    private const double StabilizedChangeGate = 3.0;
+    /// <summary>Sampled mean-abs-diff below this and the keyed text counts as unchanged.</summary>
+    private const double KeyedChangeGate = 1.5;
 
     /// <summary>This many frameless ticks (~5 s) means the game window is gone, not merely idle.</summary>
     private const int FrameGapTicks = 10;
@@ -44,30 +44,27 @@ public sealed class LootWatcher : IDisposable
     private readonly Action<string> _log;
     private readonly Action<string, int>? _onLoot;
     private readonly IFrameSource _source;
-    private readonly FrameStabilizer _stabilizer = new();
+    private readonly TextKeyer _keyer = new();
     private readonly LineBoard _board;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
 
     private OcrEngine? _ocr;
     private int _scale;                // nearest-neighbour upscale — small chat text OCRs far better at 2×
     private SoftwareBitmap? _ocrInput; // allocated once, refilled per OCR pass
-    private byte[] _lastOcrImage = [];
+    private int _frameWidth;
+    private int _frameHeight;
+    private byte[] _keyed = [];        // this frame's keyed text, the OCR input
+    private byte[] _lastKeyed = [];    // the previous OCR pass's keyed text, the change gate
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
     private readonly object _traceLock = new();
     private string? _traceDir;
     private string? _tracePrefix;
     private int _traceDumps;
-    private TextKeyer? _keyer;         // trace-only preview of the planned per-frame keying
-    private byte[] _keyedDump = [];
-    private byte[] _shadowRaw = [];    // the raw frame a shadow read will key and OCR
-    private SoftwareBitmap? _shadowInput;
     private const int TraceDumpEveryPasses = 20;  // one snapshot set ~every 20 s of activity
-    private const int TraceDumpCap = 60;          // 3 PNGs per set; ≤ ~50 MB per session
-    private const int ShadowEveryPasses = 5;      // tracing only: OCR the keyed raw frame too, for the A/B
+    private const int TraceDumpCap = 60;          // 2 PNGs per set; ≤ ~50 MB per session
     private long _framesCaptured;
     private long _ocrPasses;
     private long _pickups;
-    private int _tick;
     private int _nullTicks;
     private int _ocrBusy;
     private bool _announced;
@@ -85,9 +82,9 @@ public sealed class LootWatcher : IDisposable
     }
 
     /// <summary>
-    /// Opt-in diagnostics: every OCR pass's raw lines and every board
-    /// decision, written to a file so "did it see that row?" is a lookup,
-    /// not an inference. Off, it costs one null check per event.
+    /// Opt-in diagnostics: every OCR pass's rows and every board decision,
+    /// written to a file so "did it see that row?" is a lookup, not an
+    /// inference. Off, it costs one null check per event.
     /// </summary>
     public void SetTracing(bool on)
     {
@@ -121,15 +118,15 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private void TracePass(List<LineBoard.OcrLineInput> lines)
+    private void TracePass(List<LineBoard.OcrLineInput> rows)
     {
         if (_trace is null) return;
         lock (_traceLock)
         {
             if (_trace is null) return;
-            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  --- pass {_ocrPasses} — {lines.Count} line(s)");
-            foreach (var l in lines)
-                _trace.WriteLine($"             y={l.Y,6:F1} h={l.Height,4:F1}  \"{l.Text}\"");
+            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  --- pass {_ocrPasses} — {rows.Count} row(s)");
+            foreach (var r in rows)
+                _trace.WriteLine($"             y={r.Y,6:F1} h={r.Height,4:F1}  \"{r.Text}\"");
         }
     }
 
@@ -140,26 +137,20 @@ public sealed class LootWatcher : IDisposable
     }
 
     /// <summary>
-    /// A periodic snapshot set — the median OCR reads today, the raw frame,
-    /// and the raw frame keyed by <see cref="TextKeyer"/> — the ground truth
-    /// for tuning per-frame keying against real scenes before it replaces
-    /// the median in the OCR path. Trace-only, capped.
+    /// A periodic snapshot pair — the raw frame and what the keyer made of
+    /// it, i.e. exactly what OCR read — so readability questions stay
+    /// answerable from files, and every traced session grows the eval
+    /// corpus (#18). Trace-only, capped.
     /// </summary>
-    private void MaybeDumpStabilized(RegionFrame frame)
+    private void MaybeDumpFrames(RegionFrame frame)
     {
         if (_trace is null || _traceDumps >= TraceDumpCap || _ocrPasses % TraceDumpEveryPasses != 0) return;
         try
         {
-            var w = _stabilizer.Width;
-            var h = _stabilizer.Height;
-            SavePng(_stabilizer.Stabilized, w, h, $"pass{_ocrPasses:D6}-median");
-            SavePng(frame.Pixels, w, h, $"pass{_ocrPasses:D6}-raw");
-            _keyer ??= new TextKeyer();
-            if (_keyedDump.Length != w * h * 4) _keyedDump = new byte[w * h * 4];
-            _keyer.Key(frame.Pixels, w, h, _keyedDump);
-            SavePng(_keyedDump, w, h, $"pass{_ocrPasses:D6}-keyed");
+            SavePng(frame.Pixels, _frameWidth, _frameHeight, $"pass{_ocrPasses:D6}-raw");
+            SavePng(_keyed, _frameWidth, _frameHeight, $"pass{_ocrPasses:D6}-keyed");
             _traceDumps++;
-            Trace($"dump  pass{_ocrPasses:D6} (median / raw / keyed)");
+            Trace($"dump  pass{_ocrPasses:D6} (raw / keyed)");
         }
         catch
         {
@@ -206,10 +197,8 @@ public sealed class LootWatcher : IDisposable
             {
                 if (_nullTicks >= FrameGapTicks && _framesCaptured > 0)
                 {
-                    // The game went away and came back (restart, minimize).
-                    // The ring must not median two different worlds, and
+                    // The game went away and came back (restart, minimize) —
                     // whatever the chat shows now may already be counted.
-                    _stabilizer.Clear();
                     _resetReason = "the game window was gone for a while";
                 }
                 _nullTicks = 0;
@@ -241,19 +230,21 @@ public sealed class LootWatcher : IDisposable
             _announced = true;
             Log($"Capture is live: {frame.Width}×{frame.Height}px region, OCR in {_ocr!.RecognizerLanguage.DisplayName}" +
                 (_scale > 1 ? $" at {_scale}× upscale" : "") +
-                $" — stabilizing over {FrameStabilizer.Depth} frames before the first read.");
+                " — text keyed per frame.");
             _sinceLastLogged.Restart();
         }
 
-        if (_stabilizer.Add(frame))
+        if (frame.Width != _frameWidth || frame.Height != _frameHeight)
+        {
+            _frameWidth = frame.Width;
+            _frameHeight = frame.Height;
+            _keyed = new byte[_frameWidth * _frameHeight * 4];
+            _lastKeyed = [];
             _resetReason ??= "the watched region resized"; // everything visible next is old
-
-        // OCR at half the frame pace: the ring smooths over 2.5 s anyway, and
-        // a loot line is on screen for far longer than a second.
-        if (++_tick % OcrEveryTicks != 0) return;
+        }
 
         // One OCR pass in flight, ever. The busy flag is also the lock around
-        // the board and the OCR input bitmap.
+        // the board, the keyed buffers and the OCR input bitmap.
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) != 0) return;
         var release = true;
         try
@@ -263,32 +254,28 @@ public sealed class LootWatcher : IDisposable
                 _resetReason = null;
                 _board.Reset(reason);
             }
-            if (!_stabilizer.Stabilize()) return; // ring still warming up
 
-            var length = _stabilizer.Width * _stabilizer.Height * 4;
-            if (_lastOcrImage.Length == length &&
-                FrameStabilizer.MeanAbsDiff(_stabilizer.Stabilized, _lastOcrImage, length) < StabilizedChangeGate)
+            _keyer.Key(frame.Pixels, _frameWidth, _frameHeight, _keyed);
+
+            var length = _keyed.Length;
+            if (_lastKeyed.Length == length &&
+                FrameStabilizer.MeanAbsDiff(_keyed, _lastKeyed, length) < KeyedChangeGate)
             {
-                // The stabilized text did not change; the last readings hold
-                // for another tick. This is what settles a line while the
-                // scene is still — and what keeps an idle chat nearly free.
-                if (_trace is not null) Trace("gate  stabilized image unchanged — reconfirming previous readings");
+                // The keyed text did not change; the last readings hold for
+                // another tick. This settles a line while the scene is still
+                // — and keeps an idle chat nearly free, whatever the world
+                // behind it is doing.
+                if (_trace is not null) Trace("gate  keyed text unchanged — reconfirming previous readings");
                 _board.Reconfirm();
                 return;
             }
 
-            if (_lastOcrImage.Length != length) _lastOcrImage = new byte[length];
-            _stabilizer.Stabilized.AsSpan(0, length).CopyTo(_lastOcrImage);
-            MaybeDumpStabilized(frame);
-            var shadow = _trace is not null && _ocrPasses % ShadowEveryPasses == 0;
-            if (shadow)
-            {
-                if (_shadowRaw.Length != length) _shadowRaw = new byte[length];
-                frame.Pixels.AsSpan(0, length).CopyTo(_shadowRaw);
-            }
-            FillOcrInput();
+            if (_lastKeyed.Length != length) _lastKeyed = new byte[length];
+            _keyed.AsSpan(0, length).CopyTo(_lastKeyed);
+            MaybeDumpFrames(frame);
+            FillInput(_keyed, ref _ocrInput);
             release = false; // RecognizeAsync owns the flag now
-            _ = RecognizeAsync(shadow);
+            _ = RecognizeAsync();
         }
         finally
         {
@@ -296,11 +283,9 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private void FillOcrInput() => FillInput(_stabilizer.Stabilized, ref _ocrInput);
-
     private unsafe void FillInput(byte[] source, ref SoftwareBitmap? target)
     {
-        var size = new Size(_stabilizer.Width, _stabilizer.Height);
+        var size = new Size(_frameWidth, _frameHeight);
         if (target is null || target.PixelWidth != size.Width * _scale || target.PixelHeight != size.Height * _scale)
         {
             target?.Dispose();
@@ -325,7 +310,7 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private async Task RecognizeAsync(bool shadow)
+    private async Task RecognizeAsync()
     {
         try
         {
@@ -333,41 +318,27 @@ public sealed class LootWatcher : IDisposable
             _ocrPasses++;
             if (_disposed) return;
 
-            // Lines go to the board with their vertical position in capture
-            // pixels — position on the scroll stream is identity; the text
-            // alone cannot be (identical lines repeat).
-            var lines = new List<LineBoard.OcrLineInput>(result.Lines.Count);
+            // Fragments go through the row merge first (keying splits a row
+            // at the icon gap), then to the board with their vertical
+            // position in capture pixels — position on the scroll stream is
+            // identity; the text alone cannot be (identical rows repeat).
+            var pieces = new List<OcrRows.Piece>(result.Lines.Count);
             foreach (var line in result.Lines)
             {
                 var text = line.Text.Trim();
                 if (text.Length == 0 || line.Words.Count == 0) continue;
-                double top = double.MaxValue, bottom = double.MinValue;
+                double x = double.MaxValue, top = double.MaxValue, bottom = double.MinValue;
                 foreach (var word in line.Words)
                 {
+                    x = Math.Min(x, word.BoundingRect.X);
                     top = Math.Min(top, word.BoundingRect.Y);
                     bottom = Math.Max(bottom, word.BoundingRect.Y + word.BoundingRect.Height);
                 }
-                lines.Add(new LineBoard.OcrLineInput(text, top / _scale, (bottom - top) / _scale));
+                pieces.Add(new OcrRows.Piece(x / _scale, top / _scale, (bottom - top) / _scale, text));
             }
-            TracePass(lines);
-            _board.Ingest(lines);
-
-            // The A/B for the median's successor: while tracing, some passes
-            // also OCR the *keyed raw frame* — one crisp scroll state, no
-            // temporal smear — and record what that pipeline would have
-            // read. Diagnostics only; the board never sees these lines.
-            if (shadow && !_disposed && _trace is not null)
-            {
-                var length = _stabilizer.Width * _stabilizer.Height * 4;
-                if (_shadowRaw.Length == length)
-                {
-                    _keyer ??= new TextKeyer();
-                    if (_keyedDump.Length != length) _keyedDump = new byte[length];
-                    _keyer.Key(_shadowRaw, _stabilizer.Width, _stabilizer.Height, _keyedDump);
-                    FillInput(_keyedDump, ref _shadowInput);
-                    TraceShadow(await _ocr.RecognizeAsync(_shadowInput));
-                }
-            }
+            var rows = OcrRows.Merge(pieces);
+            TracePass(rows);
+            _board.Ingest(rows);
         }
         catch (Exception e)
         {
@@ -376,22 +347,6 @@ public sealed class LootWatcher : IDisposable
         finally
         {
             Volatile.Write(ref _ocrBusy, 0);
-        }
-    }
-
-    private void TraceShadow(OcrResult result)
-    {
-        if (_trace is null) return;
-        lock (_traceLock)
-        {
-            if (_trace is null) return;
-            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  === shadow keyed-raw read — {result.Lines.Count} line(s)");
-            foreach (var line in result.Lines)
-            {
-                var text = line.Text.Trim();
-                if (text.Length == 0 || line.Words.Count == 0) continue;
-                _trace.WriteLine($"             y={line.Words[0].BoundingRect.Y / _scale,6:F1}  \"{text}\"");
-            }
         }
     }
 
@@ -446,9 +401,6 @@ public sealed class LootWatcher : IDisposable
             _trace = null;
         }
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
-        {
             _ocrInput?.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
-            _shadowInput?.Dispose();
-        }
     }
 }
