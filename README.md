@@ -10,12 +10,15 @@ resolved on the site. The app pairs once, then sits in the tray.
 
 ## Status
 
-Milestone (a) — the pipe. The app pairs with a token, keeps a live log, and can
-send a synthetic test batch to the site's ingest. Screen capture and OCR are the
-next milestones; see the issues.
+Milestone (b) — eyes. The app pairs, and watches a picked region of the screen:
+passive capture at ~2 fps, offline OCR, every line printed to the live log.
+It deliberately does **not** send what it reads yet — consecutive frames
+re-read the same lines, and without milestone (c)'s scroll dedup that would
+double-count. This log-only stage is also how the real loot-line shapes get
+enumerated from live play before (c) parses them.
 
 - [x] **(a) The pipe** — tray app, token pairing, live log, test batch, update notice
-- [ ] **(b) Eyes** — drag-a-rectangle region pick, `Windows.Graphics.Capture` + `Windows.Media.Ocr` over it
+- [x] **(b) Eyes** — drag-a-rectangle region pick, `Windows.Graphics.Capture` + `Windows.Media.Ocr` over it
 - [ ] **(c) Dedup** — frame-to-frame scroll alignment; OCR only the newly revealed strip
 - [ ] **(d) Polish** — start with Windows, quiet failure handling, first tagged release
 
@@ -30,6 +33,44 @@ next milestones; see the issues.
 The token is stored DPAPI-encrypted per Windows user — the settings file is
 useless on another machine or account. Revoking the device on the site kills
 the token on its next request; the app will tell you in the log.
+
+## Watching the loot log
+
+Set the game up once:
+
+- **Borderless windowed** (or windowed) mode — screen capture cannot see
+  exclusive fullscreen, exactly like OBS.
+- A **dedicated chat tab** filtered to item acquisition messages only, with an
+  **opaque background**, at a **fixed position and size**.
+- English client (v1 reads English only).
+
+Then, from the tray icon: **Pick loot log region…** and drag a rectangle
+around that chat tab. The app starts watching: passive capture of those pixels
+at ~2 fps, OCR'd offline by Windows, every line printed to the log window. The
+log announces when capture is live and heartbeats every couple of minutes when
+nothing changes, so a silent log always means something is wrong.
+
+In this milestone the lines are **logged only, never sent** — until scroll
+dedup lands (milestone c), consecutive frames re-read the same lines and
+sending them would double-count. Open the log, play, and watch what it reads.
+
+On Windows 11 the app asks the OS to skip the yellow "this screen is being
+captured" border and usually may. On Windows 10 that API does not exist: the
+border around the captured monitor is unavoidable there, same as with OBS.
+
+### Built to sit beside a running game
+
+- Capture is the same compositor path OBS uses, but sampled, not streamed:
+  the app drains the frame pool twice a second and the compositor skips it
+  entirely in between.
+- The region is cropped on the GPU — only the chat-sized rectangle ever
+  crosses to the CPU, never the whole monitor.
+- OCR runs only when the region's pixels actually changed; a static chat
+  costs one memory compare per tick (fractions of a millisecond).
+- Buffers are allocated once and reused — the steady state allocates
+  practically nothing, so the GC stays quiet.
+- The process runs at below-normal priority: when the game wants the CPU,
+  the game wins.
 
 ### Windows SmartScreen
 

@@ -14,6 +14,8 @@ public sealed class TrayContext : ApplicationContext
     private readonly IngestClient _client;
     private readonly LogWindow _log = new();
     private readonly System.Windows.Forms.Timer _updateTimer;
+    private readonly ToolStripMenuItem _watchItem;
+    private LootWatcher? _watcher;
     private bool _updateBalloonShown;
 
     public TrayContext()
@@ -21,8 +23,16 @@ public sealed class TrayContext : ApplicationContext
         _settings = Settings.Load();
         _client = new IngestClient(_settings);
 
+        _watchItem = new ToolStripMenuItem("Start watching", null, async (_, _) => await ToggleWatchingAsync())
+        {
+            Enabled = _settings.Region is not null
+        };
+
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
+        menu.Items.Add("Pick loot log region…", null, async (_, _) => await PickRegionAsync());
+        menu.Items.Add(_watchItem);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
@@ -44,6 +54,9 @@ public sealed class TrayContext : ApplicationContext
         _log.Append(_settings.IsPaired
             ? $"Paired. Site: {_settings.BaseUrl}"
             : "Not paired yet — open Settings and paste a device token from the site's Devices page.");
+        _log.Append(_settings.Region is { } region
+            ? $"Loot log region saved: {region.Width}×{region.Height} at ({region.X}, {region.Y}). Right-click the tray icon → Start watching."
+            : "No loot log region yet — right-click the tray icon → Pick loot log region while the game shows its loot chat.");
 
         if (!_settings.IsPaired) ShowSettings();
 
@@ -59,6 +72,63 @@ public sealed class TrayContext : ApplicationContext
         _log.Show();
         _log.WindowState = FormWindowState.Normal;
         _log.Activate();
+    }
+
+    private async Task PickRegionAsync()
+    {
+        if (_watcher is not null) StopWatching("Stopped watching while the region is re-picked.");
+
+        using var picker = new RegionPickerForm();
+        if (picker.ShowDialog() != DialogResult.OK)
+        {
+            _log.Append("Region pick cancelled.");
+            return;
+        }
+
+        var region = picker.Selection;
+        _settings.SetRegion(region);
+        _settings.Save();
+        _watchItem.Enabled = true;
+        _log.Append($"Loot log region set: {region.Width}×{region.Height} at ({region.X}, {region.Y}).");
+        await StartWatchingAsync(); // picking a region is the intent to watch it
+    }
+
+    private async Task ToggleWatchingAsync()
+    {
+        if (_watcher is not null) StopWatching("Stopped watching.");
+        else await StartWatchingAsync();
+    }
+
+    private async Task StartWatchingAsync()
+    {
+        if (_watcher is not null || _settings.Region is not { } region) return;
+
+        var watcher = new LootWatcher(region, _log.Append);
+        try
+        {
+            await watcher.StartAsync();
+        }
+        catch (Exception e)
+        {
+            watcher.Dispose();
+            _log.Append($"Could not start watching: {e.Message}");
+            ShowLog();
+            return;
+        }
+
+        _watcher = watcher;
+        _watchItem.Text = "Stop watching";
+        _log.Append("Watching the loot log. Every line OCR reads is printed here; nothing is sent to the site yet — " +
+                    "that needs milestone (c)'s dedup, because the same lines stay on screen across frames.");
+        ShowLog();
+    }
+
+    private void StopWatching(string message)
+    {
+        _watcher?.Dispose();
+        _watcher = null;
+        _watchItem.Text = "Start watching";
+        _log.Append(message);
     }
 
     private void ShowSettings()
@@ -129,6 +199,7 @@ public sealed class TrayContext : ApplicationContext
 
     private void Quit()
     {
+        _watcher?.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
         Application.Exit();

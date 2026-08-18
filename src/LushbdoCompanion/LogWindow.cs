@@ -12,6 +12,10 @@ public sealed class LogWindow : Form
     public LogWindow()
     {
         Text = "Lushbdo Companion — log";
+        // Sized in 96-DPI pixels; Dpi auto-scaling keeps the window sensible
+        // at 125 %/150 % now that the app is per-monitor DPI aware.
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96f, 96f);
         Width = 720;
         Height = 420;
         StartPosition = FormStartPosition.CenterScreen;
@@ -39,6 +43,15 @@ public sealed class LogWindow : Form
 
     private void AppendCore(string line)
     {
+        // Hours of play must not grow the box without bound: past ~1 MB of
+        // text, drop the oldest half. The log is a live surface, not an archive.
+        if (_box.TextLength > 1_000_000)
+        {
+            var text = _box.Text;
+            var cut = text.IndexOf(Environment.NewLine, text.Length / 2, StringComparison.Ordinal);
+            _box.Text = cut < 0 ? "" : text[(cut + Environment.NewLine.Length)..];
+            _box.SelectionStart = _box.TextLength;
+        }
         _box.AppendText(line);
     }
 

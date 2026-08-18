@@ -19,6 +19,10 @@ same ToS class as streaming software. No feature is worth bending them.
 - **The site is the product.** Sessions start/stop on the site; the register
   and held lines live there. The app's only UI beyond pairing is its live log
   and (milestone b) the region picker.
+- **Featherweight beside the game.** Gamers notice; no feature is worth frame
+  drops. Capture is sampled (not streamed), cropped on the GPU, OCR runs only
+  when the watched pixels change, steady state allocates nothing, and the
+  process runs below normal priority so the game always wins the CPU.
 
 ## The contract
 
@@ -36,8 +40,11 @@ dotnet build src/LushbdoCompanion          # needs .NET 8 SDK
 dotnet publish src/LushbdoCompanion -c Release   # the shippable single exe
 ```
 
-Target framework is `net8.0-windows10.0.19041.0` on purpose — that floor is
-what makes `Windows.Graphics.Capture` and `Windows.Media.Ocr` reachable.
+Target framework is `net8.0-windows10.0.22621.0` with
+`SupportedOSPlatformVersion` 10.0.19041.0 on purpose — the 19041 floor is what
+makes `Windows.Graphics.Capture` and `Windows.Media.Ocr` reachable, and the
+22621 target additionally projects the Windows 11 capture-border-off API
+(runtime-guarded via `ApiInformation`, so the exe still runs on 19041).
 Publish is self-contained single-file: users install nothing, so nothing here
 may grow a dependency that breaks that (no installers, no runtime prereqs).
 

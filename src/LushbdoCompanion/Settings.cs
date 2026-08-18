@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace LushbdoCompanion;
 
@@ -14,6 +15,25 @@ public sealed class Settings
 {
     public string BaseUrl { get; set; } = "https://lushbdo.com";
     public string TokenProtected { get; set; } = "";
+
+    // The loot-chat rectangle from the region picker, in physical screen
+    // pixels (virtual-desktop coordinates). Zero size means never picked.
+    public int RegionX { get; set; }
+    public int RegionY { get; set; }
+    public int RegionWidth { get; set; }
+    public int RegionHeight { get; set; }
+
+    [JsonIgnore]
+    public Rectangle? Region =>
+        RegionWidth > 0 && RegionHeight > 0 ? new Rectangle(RegionX, RegionY, RegionWidth, RegionHeight) : null;
+
+    public void SetRegion(Rectangle region)
+    {
+        RegionX = region.X;
+        RegionY = region.Y;
+        RegionWidth = region.Width;
+        RegionHeight = region.Height;
+    }
 
     private static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lushbdo-companion");
