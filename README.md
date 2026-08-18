@@ -10,16 +10,16 @@ resolved on the site. The app pairs once, then sits in the tray.
 
 ## Status
 
-Milestone (b) — eyes. The app pairs, and watches a picked region of the screen:
-passive capture at ~2 fps, offline OCR, every line printed to the live log.
-It deliberately does **not** send what it reads yet — consecutive frames
-re-read the same lines, and without milestone (c)'s scroll dedup that would
-double-count. This log-only stage is also how the real loot-line shapes get
-enumerated from live play before (c) parses them.
+Milestone (c) — dedup and live sending. The app watches the picked region,
+stabilizes it over a rolling window of frames so OCR reads sharp text over the
+animated game world, confirms every line across frames, and sends confirmed
+pickups to your running gather session in small batches. Lines the site cannot
+match are held there for you to resolve — never guessed at, never silently
+dropped.
 
 - [x] **(a) The pipe** — tray app, token pairing, live log, test batch, update notice
 - [x] **(b) Eyes** — drag-a-rectangle region pick, `Windows.Graphics.Capture` + `Windows.Media.Ocr` over it
-- [ ] **(c) Dedup** — frame-to-frame scroll alignment; OCR only the newly revealed strip
+- [x] **(c) Dedup** — temporal stabilization, reading consensus, text-anchored scroll tracking, live sending
 - [ ] **(d) Polish** — start with Windows, quiet failure handling, first tagged release
 
 ## Setup
@@ -40,22 +40,29 @@ Set the game up once:
 
 - **Borderless windowed** (or windowed) mode — screen capture cannot see
   exclusive fullscreen, exactly like OBS.
-- A **dedicated chat tab** filtered to item acquisition messages only, with an
-  **opaque background**, at a **fixed position and size**.
+- A **dedicated chat tab** filtered to item acquisition messages only, at a
+  **fixed position and size**. A transparent background is fine — the app
+  stabilizes the image across frames before reading it. An opaque, dark
+  background is still a recommendation that improves accuracy, never a
+  requirement.
 - English client (v1 reads English only).
 
 Then, from the tray icon: **Pick loot log region…**. The app finds the game's
 window, photographs one frame of it, and shows that still full-screen — drag a
-rectangle around the chat tab on it, Esc cancels. Because the frame comes from
-the game window's own surface, it does not matter what is covering the game at
-that moment: open the tray menu over a browser and the picker still shows a
-clean still of the chat. (If the game window cannot be found, the app falls
-back to picking on the live screen after a short "switch to the game"
-countdown.)
+rectangle around the chat tab's text on it, Esc cancels. Start the rectangle
+just right of the `System` chip column — every loot line begins "You have
+obtained", so nothing is lost and the chip never reaches OCR. Because the
+frame comes from the game window's own surface, it does not matter what is
+covering the game at that moment: open the tray menu over a browser and the
+picker still shows a clean still of the chat. (If the game window cannot be
+found, the app falls back to picking on the live screen after a short "switch
+to the game" countdown.)
 
 The app then watches that region of the **game window itself — never the
-monitor**: passive capture at ~2 fps, OCR'd offline by Windows, every line
-printed to the log window. Capturing the window's own surface means:
+monitor**: passive capture at ~2 fps, a rolling five-frame median that keeps
+the chat glyphs sharp while the world behind them smears away, offline OCR
+over that stabilized image. Lines already on screen when watching starts are
+old and are never sent. Capturing the window's own surface means:
 
 - **The app can only ever see the game, never the desktop.** Other windows
   crossing the region are structurally invisible to it — there is no pixel of
@@ -66,14 +73,29 @@ printed to the log window. Capturing the window's own surface means:
   the game restarting.
 - The game not running is not an error. The watcher says it is waiting for the
   game window and starts by itself once the game is up — same again after the
-  game exits and relaunches.
+  game exits and relaunches. What the chat shows after a gap is treated as
+  old, never recounted.
 
-The log announces when capture is live and heartbeats every couple of minutes
-when nothing changes, so a silent log always means something is wrong.
+A pickup is sent only after its reading recurs on a later frame — nothing is
+ever sent on one frame's word. Confirmed lines leave in a small batch every
+few seconds; the site matches names server-side, and what it cannot match is
+held on the session page for you to resolve. No session running? The app
+holds what it reads, says so in the log, and delivers when you press Start.
+The log announces when capture is live and heartbeats every couple of
+minutes when nothing changes, so a silent log always means something is
+wrong.
 
-In this milestone the lines are **logged only, never sent** — until scroll
-dedup lands (milestone c), consecutive frames re-read the same lines and
-sending them would double-count. Open the log, play, and watch what it reads.
+Three things to know while it runs:
+
+- **Don't scroll the loot tab.** New lines are told from old by where they
+  sit on the scroll stream; wheel-scrolling the tab makes old lines look
+  new, so the app realigns and treats everything visible as already counted.
+- **Burst loot can undercount.** If more lines land between two samples than
+  the window shows, whatever scrolled straight past is missed, silently.
+  Fine for gathering — a node every few seconds; grinding is out of scope
+  for v1.
+- **Silver is recognized and deliberately not sent** — gather sessions count
+  items, not currency.
 
 On Windows 11 the app asks the OS to skip the yellow "this window is being
 captured" border and usually may. On Windows 10 that API does not exist: the
@@ -86,8 +108,9 @@ border around the game window is unavoidable there, same as with OBS.
   twice a second and the compositor skips it entirely in between.
 - The region is cropped on the GPU — only the chat-sized rectangle ever
   crosses to the CPU, never the whole window.
-- OCR runs only when the region's pixels actually changed; a static chat
-  costs one memory compare per tick (fractions of a millisecond).
+- OCR reads the median-stabilized image at half the capture pace, and only
+  when that image actually changed — a still scene costs a few milliseconds
+  of arithmetic per tick and no OCR at all.
 - Buffers are allocated once and reused — the steady state allocates
   practically nothing, so the GC stays quiet.
 - The process runs at below-normal priority: when the game wants the CPU,
