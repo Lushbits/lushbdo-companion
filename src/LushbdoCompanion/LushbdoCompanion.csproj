@@ -2,13 +2,21 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- The Windows 10 TFM is what makes Windows.Graphics.Capture and
-         Windows.Media.Ocr reachable later; 19041 is the floor both need. -->
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <!-- 10.0.19041 stays the OS floor — it is what makes
+         Windows.Graphics.Capture and Windows.Media.Ocr reachable. Targeting
+         22621 additionally projects the Windows 11 API that turns off the
+         yellow capture border; its use is runtime-guarded via ApiInformation,
+         so the exe still runs on 19041. -->
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>0.1.0</Version>
+    <!-- Per-monitor DPI awareness makes picked coordinates and capture frames
+         share one physical-pixel space; the crop copies pixels by pointer. -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>0.2.0</Version>
     <AssemblyTitle>Lushbdo Companion</AssemblyTitle>
     <Product>Lushbdo Companion</Product>
     <!-- Self-contained single file keeps "download the app" one .exe: the

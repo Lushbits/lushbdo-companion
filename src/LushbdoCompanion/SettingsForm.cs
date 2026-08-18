@@ -14,6 +14,11 @@ public sealed class SettingsForm : Form
         _settings = settings;
 
         Text = "Lushbdo Companion — settings";
+        // The layout below is laid out in 96-DPI pixels; Dpi auto-scaling is
+        // what keeps it usable at 125 %/150 % now that the app is per-monitor
+        // DPI aware for the capture side.
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96f, 96f);
         Width = 520;
         Height = 300;
         FormBorderStyle = FormBorderStyle.FixedDialog;

@@ -36,8 +36,11 @@ dotnet build src/LushbdoCompanion          # needs .NET 8 SDK
 dotnet publish src/LushbdoCompanion -c Release   # the shippable single exe
 ```
 
-Target framework is `net8.0-windows10.0.19041.0` on purpose — that floor is
-what makes `Windows.Graphics.Capture` and `Windows.Media.Ocr` reachable.
+Target framework is `net8.0-windows10.0.22621.0` with
+`SupportedOSPlatformVersion` 10.0.19041.0 on purpose — the 19041 floor is what
+makes `Windows.Graphics.Capture` and `Windows.Media.Ocr` reachable, and the
+22621 target additionally projects the Windows 11 capture-border-off API
+(runtime-guarded via `ApiInformation`, so the exe still runs on 19041).
 Publish is self-contained single-file: users install nothing, so nothing here
 may grow a dependency that breaks that (no installers, no runtime prereqs).
 
