@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- The Windows 10 TFM is what makes Windows.Graphics.Capture and
+         Windows.Media.Ocr reachable later; 19041 is the floor both need. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>0.1.0</Version>
+    <AssemblyTitle>Lushbdo Companion</AssemblyTitle>
+    <Product>Lushbdo Companion</Product>
+    <!-- Self-contained single file keeps "download the app" one .exe: the
+         .NET runtime rides inside it, so nothing is installed on the PC.
+         Settings live in %APPDATA%; the exe can sit anywhere. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- DPAPI, so the paired token is not plaintext on disk. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
