@@ -16,7 +16,7 @@
          share one physical-pixel space; the crop copies pixels by pointer. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <AssemblyTitle>Lushbdo Companion</AssemblyTitle>
     <Product>Lushbdo Companion</Product>
     <!-- Self-contained single file keeps "download the app" one .exe: the
