@@ -136,6 +136,12 @@ public sealed class LootWatcher : IDisposable
         if (_trace is not null) Trace("log   " + message);
     }
 
+    /// <summary>Lets neighbors (the sender) land their log lines in the trace too, so a traced session is complete.</summary>
+    public void TraceExternal(string message)
+    {
+        if (_trace is not null) Trace("log   " + message);
+    }
+
     /// <summary>
     /// A periodic snapshot pair — the raw frame and what the keyer made of
     /// it, i.e. exactly what OCR read — so readability questions stay

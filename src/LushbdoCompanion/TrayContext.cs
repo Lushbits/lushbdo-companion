@@ -181,7 +181,11 @@ public sealed class TrayContext : ApplicationContext
             // Revoked fires on a worker thread; the menu and balloon live on
             // this one.
             var ui = SynchronizationContext.Current;
-            sender = new LootSender(_client, _log.Append);
+            sender = new LootSender(_client, msg =>
+            {
+                _log.Append(msg);
+                _watcher?.TraceExternal(msg); // sender lines belong in a traced session too
+            });
             sender.Revoked += why => ui?.Post(_ =>
             {
                 StopWatching("Watching stopped — the site rejected this device's token. Pair again from the site's " +
