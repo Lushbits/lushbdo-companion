@@ -74,6 +74,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     private bool _baselinePending = true;
     private int _nullPasses;
     private int _backwardsPasses;
+    private bool _blindSpell;
     private double _lineHeight = 18;
 
     /// <summary>True while any tracked line still awaits consensus or a wrapped tail.</summary>
@@ -161,6 +162,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 dy = unique; // the duplicates lied; the unique lines pin the true shift
             }
             if (fresh) _backwardsPasses = 0;
+            _blindSpell = false;
             trace?.Invoke($"vote  dy {dy:F1} (full {voted:F1}{(uniqueVote is { } uv ? $", unique {uv:F1}" : "")}), {_trackers.Count} tracker(s)");
         }
         else if (_trackers.TrueForAll(t => !t.Emitted))
@@ -171,10 +173,32 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             // first reading was a mangle can still pool toward consensus.
             trace?.Invoke("vote  nothing matched, nothing emitted yet — assuming still");
             dy = 0;
+            _blindSpell = false;
+        }
+        else if (lines.Count * 2 < _trackers.Count)
+        {
+            // No text matched anything, and there was barely any text to
+            // match: the chat faded (the game dims an idle chat) or is
+            // covered. Blindness is not a different screen — realigning here
+            // is what re-baselined on faded fragments and let the un-fade
+            // re-count old rows (field log, 21:15–21:17). Hold every
+            // tracker; when the text comes back it will match them again,
+            // and anything that arrived meanwhile enters at the bottom as
+            // always.
+            trace?.Invoke($"vote  near-blind ({lines.Count} line(s) vs {_trackers.Count} tracker(s)) — holding");
+            if (!_blindSpell)
+            {
+                _blindSpell = true;
+                note("The chat stopped reading (faded or covered) — holding position until it returns.");
+            }
+            return;
         }
         else
         {
-            trace?.Invoke($"vote  nothing matched — blind pass {_nullPasses + 1}/{NullPassesBeforeReset}");
+            // A screenful of readable text matching nothing is not
+            // blindness — the world changed under us (another chat tab, a
+            // teleport). Three in a row and we start over.
+            trace?.Invoke($"vote  nothing matched across {lines.Count} line(s) — blind pass {_nullPasses + 1}/{NullPassesBeforeReset}");
             if (++_nullPasses >= NullPassesBeforeReset)
                 ResetForRealign("the chat stopped reading recognizably");
             return;
@@ -326,10 +350,20 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             var bornOld = 0;
             foreach (var line in unmatched)
             {
-                var isNew = newBudget > 0 && line.Y >= bottom - 0.5 * _lineHeight;
-                if (isNew) newBudget--;
+                var inBottomZone = line.Y >= bottom - 0.5 * _lineHeight;
+                if (inBottomZone && newBudget <= 0)
+                {
+                    // At the bottom edge but this pass's scroll does not
+                    // account for it — a mid-flip median can show a new line
+                    // one pass before the survivors' shift reads. Seen-early
+                    // is not born-old: leave it untracked, and the pass that
+                    // measures the motion counts it (field log, 22:12:
+                    // nearly every real pickup was condemned this way).
+                    continue;
+                }
+                if (inBottomZone) newBudget--;
                 else bornOld++;
-                var t = new Tracker { Y = line.Y, Emitted = !isNew };
+                var t = new Tracker { Y = line.Y, Emitted = !inBottomZone };
                 t.Readings[line.Text] = 1;
                 t.MatchedThisPass = true;
                 _trackers.Add(t);
@@ -561,6 +595,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         _baselinePending = true;
         _nullPasses = 0;
         _backwardsPasses = 0;
+        _blindSpell = false;
         note(unconfirmed > 0
             ? $"Realigning ({reason}) — {unconfirmed} unconfirmed line(s) skipped; what is on screen now is treated as old."
             : $"Realigning ({reason}) — what is on screen now is treated as old.");

@@ -336,9 +336,49 @@ public class LineBoardTests
         // the un-fade reveals two old rows beneath the old bottom edge.
         Pass((RoughStone, 20), (Weeds, 40), (oldB, 60), (oldB, 80), (RoughStone, 100));
         Pass((RoughStone, 20), (Weeds, 40), (oldB, 60), (oldB, 80), (RoughStone, 100));
+        Pass((RoughStone, 20), (Weeds, 40), (oldB, 60), (oldB, 80), (RoughStone, 100));
         var e = Assert.Single(_emitted);
         Assert.Equal("Rough Stone", e.Name); // the bottom-most line is the arrival
-        Assert.Contains(_notes, n => n.Contains("revealed"));
+    }
+
+    [Fact]
+    public void ALineSeenBeforeItsScrollIsMeasuredIsStillCounted()
+    {
+        // A mid-flip median can show the new bottom line one pass before
+        // the survivors' shift reads (field log, 22:12: nearly every real
+        // pickup was skipped as "revealed"). Seeing it early must not
+        // condemn it — it waits untracked until a pass measures the motion,
+        // then counts.
+        const string blood = "You have obtained [Ox Blood] x8. (22:11)";
+        Pass((RoughStone, 60), (Weeds, 80)); // baseline
+        Pass((RoughStone, 60), (Weeds, 80), (blood, 100)); // the line reads before the scroll does
+        Pass((RoughStone, 40), (Weeds, 60), (blood, 80));  // the scroll is measured — it enters properly
+        Pass((RoughStone, 40), (Weeds, 60), (blood, 80));
+        Assert.Equal([("Ox Blood", 8, blood)], _emitted);
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
+    }
+
+    [Fact]
+    public void AFadedChatHoldsAndResumesInsteadOfRealigning()
+    {
+        // The game fades an idle chat and OCR goes near-blind. Blindness is
+        // not a different screen: the board holds its trackers through the
+        // fade, and the un-fade matches them again — old rows recognized,
+        // and the pickup that arrived meanwhile entering at the bottom.
+        const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
+        const string blood = "You have obtained [Ox Blood] x8. (22:11)";
+        Pass((RoughStone, 40), (Weeds, 60), (salt, 80)); // baseline
+        Pass(("~~", 50));   // the fade: fragments only
+        Pass(("≈", 60));
+        Pass(("~~", 50));
+        Pass(("≈≈", 40));
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
+        Assert.Contains(_notes, n => n.Contains("holding"));
+        // The chat un-fades with one new pickup at the bottom.
+        Pass((RoughStone, 20), (Weeds, 40), (salt, 60), (blood, 80));
+        Pass((RoughStone, 20), (Weeds, 40), (salt, 60), (blood, 80));
+        Assert.Equal([("Ox Blood", 8, blood)], _emitted);
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
     }
 
     [Fact]
