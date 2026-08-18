@@ -1,50 +1,60 @@
-using System.Diagnostics;
+using System.Drawing;
+using System.Runtime.InteropServices;
 using Windows.Foundation.Metadata;
 using Windows.Graphics;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
-using Windows.Graphics.Imaging;
 
 namespace LushbdoCompanion;
 
 /// <summary>
-/// Windows.Graphics.Capture as an IFrameSource: the compositor hands us every
-/// frame the monitor draws, we keep one per pace tick and copy it to a CPU
-/// bitmap. This is the same capture path OBS uses — the OS knows about it,
-/// indicates it, and the game is never touched.
+/// Windows.Graphics.Capture as an IFrameSource, built to cost nothing next to
+/// a running game. The frame pool is drained on a timer, not on compositor
+/// events: between ticks the pool sits full and the compositor skips us
+/// entirely, so capture work is a couple of GPU copies per second instead of
+/// one per rendered frame. The region is cropped on the GPU and only that
+/// chat-sized rectangle is ever read back to the CPU, into a buffer allocated
+/// once. Same passive path as OBS — the game is never touched.
 /// </summary>
 public sealed class WgcFrameSource : IFrameSource
 {
-    public event Action<SoftwareBitmap>? FrameArrived;
-    public event Action<Exception>? FrameFailed;
+    public event Action<RegionFrame?>? Tick;
+    public event Action<Exception>? Failed;
 
-    private readonly Stopwatch _sinceLastFrame = Stopwatch.StartNew();
     private IDirect3DDevice? _device;
     private Direct3D11CaptureFramePool? _pool;
     private GraphicsCaptureSession? _session;
+    private System.Threading.Timer? _timer;
     private SizeInt32 _poolSize;
-    private TimeSpan _pace;
+    private Rectangle _region;              // requested crop, monitor-relative physical pixels
+    private IntPtr _d3dDevice, _d3dContext, _staging;
+    private Size _stagingSize;
+    private byte[] _pixels = [];
     private int _busy;
     private volatile bool _disposed;
 
-    public async Task StartAsync(IntPtr monitor, TimeSpan pace)
+    public async Task StartAsync(IntPtr monitor, Rectangle regionOnMonitor, TimeSpan pace)
     {
         if (!GraphicsCaptureSession.IsSupported())
             throw new InvalidOperationException("this Windows build cannot do passive screen capture (Windows 10 2004 or newer is needed).");
 
-        _pace = pace;
+        _region = regionOnMonitor;
         _device = CaptureInterop.CreateDirect3DDevice();
+        _d3dDevice = CaptureInterop.GetD3DPointer(_device, CaptureInterop.ID3D11Device);
+        _d3dContext = CaptureInterop.GetImmediateContext(_d3dDevice);
+
         var item = CaptureInterop.CreateItemForMonitor(monitor);
         _poolSize = item.Size;
         _pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
             _device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, _poolSize);
-        _pool.FrameArrived += OnPoolFrame;
         _session = _pool.CreateCaptureSession(item);
         // The pointer crossing the chat must not corrupt a line mid-read.
         _session.IsCursorCaptureEnabled = false;
         await TryDisableBorderAsync(_session);
         _session.StartCapture();
+
+        _timer = new System.Threading.Timer(OnTimer, null, pace, pace);
     }
 
     /// <summary>
@@ -71,49 +81,58 @@ public sealed class WgcFrameSource : IFrameSource
 #pragma warning restore CA1416
     }
 
-    private void OnPoolFrame(Direct3D11CaptureFramePool sender, object args)
+    private void OnTimer(object? state)
     {
-        var frame = sender.TryGetNextFrame();
-        if (frame is null) return;
-
-        // The compositor offers a frame whenever anything on screen changes;
-        // take one per pace tick, keep one in flight, drop the rest.
-        if (_disposed || _sinceLastFrame.Elapsed < _pace || Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
-        {
-            frame.Dispose();
-            return;
-        }
-        _sinceLastFrame.Restart();
-        _ = DeliverAsync(frame);
-    }
-
-    private async Task DeliverAsync(Direct3D11CaptureFrame frame)
-    {
+        if (_disposed || Interlocked.CompareExchange(ref _busy, 1, 0) != 0) return;
         try
         {
-            SoftwareBitmap bitmap;
-            using (frame)
+            // Everything queued since the last tick is stale except the newest;
+            // freeing the buffers here is also what invites the compositor to
+            // copy again, so its work stays bounded by our pace.
+            Direct3D11CaptureFrame? frame = null;
+            while (_pool!.TryGetNextFrame() is { } next)
             {
-                if (frame.ContentSize.Width != _poolSize.Width || frame.ContentSize.Height != _poolSize.Height)
-                {
-                    // The monitor changed mode under us (resolution or scaling
-                    // switch): follow it; the watcher re-clamps its crop.
-                    _poolSize = frame.ContentSize;
-                    _pool!.Recreate(_device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, _poolSize);
-                }
-                bitmap = await SoftwareBitmap.CreateCopyFromSurfaceAsync(frame.Surface, BitmapAlphaMode.Ignore);
+                frame?.Dispose();
+                frame = next;
             }
 
-            if (_disposed || FrameArrived is not { } deliver)
+            if (frame is null)
             {
-                bitmap.Dispose();
+                Tick?.Invoke(null); // alive, but the screen produced nothing new
                 return;
             }
-            deliver(bitmap);
+
+            using (frame)
+            {
+                var content = frame.ContentSize;
+                var crop = Rectangle.Intersect(_region, new Rectangle(0, 0, content.Width, content.Height));
+                if (crop.Width < 1 || crop.Height < 1)
+                {
+                    Tick?.Invoke(null); // the region fell off the monitor (mode change); keep ticking
+                }
+                else
+                {
+                    EnsureStaging(crop.Size);
+                    var frameTexture = CaptureInterop.GetD3DPointer(frame.Surface, CaptureInterop.ID3D11Texture2D);
+                    try { CaptureInterop.CopyRegion(_d3dContext, _staging, frameTexture, crop); }
+                    finally { Marshal.Release(frameTexture); }
+                    CaptureInterop.ReadTexture(_d3dContext, _staging, crop.Width, crop.Height, _pixels);
+                    Tick?.Invoke(new RegionFrame(_pixels, crop.Width, crop.Height));
+                }
+
+                if (content.Width != _poolSize.Width || content.Height != _poolSize.Height)
+                {
+                    // The monitor changed mode under us; follow it after the
+                    // frame is done being read, as the old surface dies with
+                    // the recreate.
+                    _poolSize = content;
+                    _pool.Recreate(_device, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, _poolSize);
+                }
+            }
         }
         catch (Exception e)
         {
-            if (!_disposed) FrameFailed?.Invoke(e);
+            if (!_disposed) Failed?.Invoke(e);
         }
         finally
         {
@@ -121,13 +140,32 @@ public sealed class WgcFrameSource : IFrameSource
         }
     }
 
+    private void EnsureStaging(Size size)
+    {
+        if (size == _stagingSize) return;
+        if (_staging != IntPtr.Zero) Marshal.Release(_staging);
+        _staging = CaptureInterop.CreateStagingTexture(_d3dDevice, size.Width, size.Height);
+        _stagingSize = size;
+        _pixels = new byte[size.Width * size.Height * 4];
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        if (_pool is not null) _pool.FrameArrived -= OnPoolFrame;
+
+        // Wait out an in-flight tick before pulling the D3D objects from under it.
+        if (_timer is not null)
+        {
+            using var drained = new ManualResetEvent(false);
+            if (_timer.Dispose(drained)) drained.WaitOne(2000);
+        }
+
         _session?.Dispose();
         _pool?.Dispose();
+        if (_staging != IntPtr.Zero) Marshal.Release(_staging);
+        if (_d3dContext != IntPtr.Zero) Marshal.Release(_d3dContext);
+        if (_d3dDevice != IntPtr.Zero) Marshal.Release(_d3dDevice);
         (_device as IDisposable)?.Dispose();
     }
 }

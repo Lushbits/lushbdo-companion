@@ -8,15 +8,17 @@ using WinRT;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The eyes: frames of the monitor holding the picked region arrive from an
-/// IFrameSource, get cropped to that region, OCR'd by the offline Windows
-/// engine, and every line is printed to the log. Milestone (b) deliberately
-/// stops there — the same lines stay on screen across frames, so sending them
-/// before milestone (c)'s scroll dedup would double-count massively.
+/// The eyes: region pixels arrive from an IFrameSource, get compared against
+/// the previous frame, and only when they actually changed are they upscaled
+/// and OCR'd — a static chat costs one vectorized memory compare per tick and
+/// nothing else, which is what lets this sit beside a running game. Every
+/// line read is printed to the log. Milestone (b) deliberately stops there —
+/// the same lines stay on screen across frames, so sending them before
+/// milestone (c)'s scroll dedup would double-count massively.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
-    /// <summary>~2 fps: a scrolling loot line is on screen for seconds, and OCR twice a second costs nothing.</summary>
+    /// <summary>~2 fps: a scrolling loot line is on screen for seconds; sampling twice a second cannot miss it.</summary>
     private static readonly TimeSpan FramePace = TimeSpan.FromMilliseconds(500);
 
     /// <summary>A quiet log line this often, so a silent log can only mean capture died.</summary>
@@ -28,10 +30,14 @@ public sealed class LootWatcher : IDisposable
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
 
     private OcrEngine? _ocr;
-    private Rectangle _crop;   // the region, relative to its monitor's origin
-    private int _scale;        // nearest-neighbour upscale — small chat text OCRs far better at 2×
-    private long _framesRead;
-    private bool _firstFrameAnnounced;
+    private int _scale;                // nearest-neighbour upscale — small chat text OCRs far better at 2×
+    private SoftwareBitmap? _ocrInput; // allocated once, refilled per OCR pass
+    private byte[] _prevPixels = [];
+    private Size _frameSize;
+    private long _framesCaptured;
+    private long _ocrPasses;
+    private int _ocrBusy;
+    private bool _announced;
     private string _lastFrameText = "";
     private string _lastFailure = "";
     private volatile bool _disposed;
@@ -49,69 +55,126 @@ public sealed class LootWatcher : IDisposable
             "Windows has no OCR language installed — add English (United States) under Settings → Time & language → Language.");
 
         var (monitor, monitorBounds) = CaptureInterop.MonitorFor(_region);
-        _crop = Rectangle.Intersect(_region, monitorBounds);
-        if (_crop.Width < 8 || _crop.Height < 8)
+        var crop = Rectangle.Intersect(_region, monitorBounds);
+        if (crop.Width < 8 || crop.Height < 8)
             throw new InvalidOperationException("the saved region is not on any monitor any more — pick it again.");
-        if (_crop != _region)
+        if (crop != _region)
             _log("The region hangs off its monitor's edge; watching the part that fits.");
-        _crop.Offset(-monitorBounds.X, -monitorBounds.Y);
+        crop.Offset(-monitorBounds.X, -monitorBounds.Y);
 
         var max = (int)OcrEngine.MaxImageDimension;
-        if (_crop.Width > max || _crop.Height > max)
+        if (crop.Width > max || crop.Height > max)
             throw new InvalidOperationException($"the region is bigger than OCR allows ({max}px) — drag it around just the loot chat.");
-        _scale = _crop.Width * 2 <= max && _crop.Height * 2 <= max ? 2 : 1;
+        _scale = crop.Width * 2 <= max && crop.Height * 2 <= max ? 2 : 1;
 
-        _source.FrameArrived += OnFrame;
-        _source.FrameFailed += OnFrameFailed;
-        await _source.StartAsync(monitor, FramePace);
+        _source.Tick += OnTick;
+        _source.Failed += OnFailed;
+        await _source.StartAsync(monitor, crop, FramePace);
     }
 
-    private async void OnFrame(SoftwareBitmap monitorPixels)
+    private void OnTick(RegionFrame? tick)
     {
         try
         {
-            OcrResult result;
-            using (monitorPixels)
-            using (var lootChat = CropAndUpscale(monitorPixels, _crop, _scale))
-                result = await _ocr!.RecognizeAsync(lootChat);
             if (_disposed) return;
-
-            _framesRead++;
-            if (!_firstFrameAnnounced)
+            if (tick is { } frame) ReadFrame(frame);
+            if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
-                _firstFrameAnnounced = true;
-                _log($"Capture is live: {_crop.Width}×{_crop.Height}px region, OCR in {_ocr.RecognizerLanguage.DisplayName}" +
-                     (_scale > 1 ? $" at {_scale}× upscale." : "."));
-                _sinceLastLogged.Restart();
-            }
-
-            var lines = result.Lines.Select(l => l.Text.Trim()).Where(t => t.Length > 0).ToArray();
-            var frameText = string.Join("\n", lines);
-            if (frameText != _lastFrameText)
-            {
-                // Something on screen moved. Print everything visible — repeats
-                // across frames are expected and are exactly what milestone (c)
-                // will dedup; this stage exists to enumerate real line shapes.
-                _lastFrameText = frameText;
-                foreach (var line in lines)
-                    _log($"read  \"{line}\"");
-                _sinceLastLogged.Restart();
-            }
-            else if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
-            {
-                _log($"Still watching — {_framesRead} frames read so far, nothing new on screen.");
+                _log($"Still watching — {_framesCaptured} frames captured, {_ocrPasses} OCR passes, nothing new on screen.");
                 _sinceLastLogged.Restart();
             }
         }
         catch (Exception e)
         {
-            OnFrameFailed(e);
+            OnFailed(e);
         }
     }
 
-    private void OnFrameFailed(Exception e)
+    private void ReadFrame(RegionFrame frame)
     {
-        // One failure can repeat every frame; say it once, not twice a second.
+        _framesCaptured++;
+        if (!_announced)
+        {
+            _announced = true;
+            _log($"Capture is live: {frame.Width}×{frame.Height}px region, OCR in {_ocr!.RecognizerLanguage.DisplayName}" +
+                 (_scale > 1 ? $" at {_scale}× upscale." : "."));
+            _sinceLastLogged.Restart();
+        }
+
+        // The gate that keeps this featherweight: OCR only runs when the chat
+        // pixels actually changed.
+        var size = new Size(frame.Width, frame.Height);
+        var pixels = frame.Pixels.AsSpan(0, frame.Width * frame.Height * 4);
+        if (size == _frameSize && pixels.SequenceEqual(_prevPixels)) return;
+
+        // One OCR pass in flight, ever. A change landing mid-pass is not
+        // recorded as seen, so the next tick picks it up.
+        if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) != 0) return;
+
+        if (size != _frameSize)
+        {
+            _frameSize = size;
+            _prevPixels = new byte[pixels.Length];
+            _ocrInput?.Dispose();
+            _ocrInput = new SoftwareBitmap(BitmapPixelFormat.Bgra8, size.Width * _scale, size.Height * _scale, BitmapAlphaMode.Ignore);
+        }
+        pixels.CopyTo(_prevPixels);
+        FillOcrInput(frame);
+        _ = RecognizeAsync();
+    }
+
+    private unsafe void FillOcrInput(RegionFrame frame)
+    {
+        using var buffer = _ocrInput!.LockBuffer(BitmapBufferAccessMode.Write);
+        using var reference = buffer.CreateReference();
+        reference.As<CaptureInterop.IMemoryBufferByteAccess>().GetBuffer(out var dst, out _);
+        var desc = buffer.GetPlaneDescription(0);
+
+        fixed (byte* src = frame.Pixels)
+        {
+            var srcStride = frame.Width * 4;
+            for (var y = 0; y < frame.Height * _scale; y++)
+            {
+                var srcRow = (uint*)(src + y / _scale * srcStride);
+                var dstRow = (uint*)(dst + desc.StartIndex + y * desc.Stride);
+                for (var x = 0; x < frame.Width * _scale; x++)
+                    dstRow[x] = srcRow[x / _scale];
+            }
+        }
+    }
+
+    private async Task RecognizeAsync()
+    {
+        try
+        {
+            var result = await _ocr!.RecognizeAsync(_ocrInput);
+            _ocrPasses++;
+            if (_disposed) return;
+
+            var lines = result.Lines.Select(l => l.Text.Trim()).Where(t => t.Length > 0).ToArray();
+            var frameText = string.Join("\n", lines);
+            if (frameText == _lastFrameText) return; // pixels moved but the text did not (animations, glow)
+            // Something really changed. Print everything visible — repeats
+            // across frames are expected and are exactly what milestone (c)
+            // will dedup; this stage exists to enumerate real line shapes.
+            _lastFrameText = frameText;
+            foreach (var line in lines)
+                _log($"read  \"{line}\"");
+            _sinceLastLogged.Restart();
+        }
+        catch (Exception e)
+        {
+            OnFailed(e);
+        }
+        finally
+        {
+            Volatile.Write(ref _ocrBusy, 0);
+        }
+    }
+
+    private void OnFailed(Exception e)
+    {
+        // One failure can repeat every tick; say it once, not twice a second.
         if (_disposed || e.Message == _lastFailure) return;
         _lastFailure = e.Message;
         _log($"A frame could not be read: {e.Message}");
@@ -132,40 +195,14 @@ public sealed class LootWatcher : IDisposable
         return OcrEngine.TryCreateFromUserProfileLanguages();
     }
 
-    private static unsafe SoftwareBitmap CropAndUpscale(SoftwareBitmap source, Rectangle crop, int scale)
-    {
-        // Clamp every frame: a mode switch can shrink the monitor under us and
-        // the pointer arithmetic below must never leave the source buffer.
-        crop.Intersect(new Rectangle(0, 0, source.PixelWidth, source.PixelHeight));
-        var result = new SoftwareBitmap(BitmapPixelFormat.Bgra8,
-            Math.Max(1, crop.Width * scale), Math.Max(1, crop.Height * scale), BitmapAlphaMode.Ignore);
-        if (crop.Width < 1 || crop.Height < 1) return result; // off-screen: hand OCR a blank pixel
-
-        using var src = source.LockBuffer(BitmapBufferAccessMode.Read);
-        using var dst = result.LockBuffer(BitmapBufferAccessMode.Write);
-        using var srcRef = src.CreateReference();
-        using var dstRef = dst.CreateReference();
-        srcRef.As<CaptureInterop.IMemoryBufferByteAccess>().GetBuffer(out var srcBytes, out _);
-        dstRef.As<CaptureInterop.IMemoryBufferByteAccess>().GetBuffer(out var dstBytes, out _);
-        var srcDesc = src.GetPlaneDescription(0);
-        var dstDesc = dst.GetPlaneDescription(0);
-
-        for (var y = 0; y < result.PixelHeight; y++)
-        {
-            var srcRow = (uint*)(srcBytes + srcDesc.StartIndex + (crop.Y + y / scale) * srcDesc.Stride) + crop.X;
-            var dstRow = (uint*)(dstBytes + dstDesc.StartIndex + y * dstDesc.Stride);
-            for (var x = 0; x < result.PixelWidth; x++)
-                dstRow[x] = srcRow[x / scale];
-        }
-        return result;
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _source.FrameArrived -= OnFrame;
-        _source.FrameFailed -= OnFrameFailed;
+        _source.Tick -= OnTick;
+        _source.Failed -= OnFailed;
         _source.Dispose();
+        if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
+            _ocrInput?.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
     }
 }

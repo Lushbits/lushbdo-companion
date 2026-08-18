@@ -58,6 +58,20 @@ On Windows 11 the app asks the OS to skip the yellow "this screen is being
 captured" border and usually may. On Windows 10 that API does not exist: the
 border around the captured monitor is unavoidable there, same as with OBS.
 
+### Built to sit beside a running game
+
+- Capture is the same compositor path OBS uses, but sampled, not streamed:
+  the app drains the frame pool twice a second and the compositor skips it
+  entirely in between.
+- The region is cropped on the GPU — only the chat-sized rectangle ever
+  crosses to the CPU, never the whole monitor.
+- OCR runs only when the region's pixels actually changed; a static chat
+  costs one memory compare per tick (fractions of a millisecond).
+- Buffers are allocated once and reused — the steady state allocates
+  practically nothing, so the GC stays quiet.
+- The process runs at below-normal priority: when the game wants the CPU,
+  the game wins.
+
 ### Windows SmartScreen
 
 The `.exe` is unsigned (code-signing certificates cost real money), so the

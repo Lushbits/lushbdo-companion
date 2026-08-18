@@ -19,6 +19,10 @@ same ToS class as streaming software. No feature is worth bending them.
 - **The site is the product.** Sessions start/stop on the site; the register
   and held lines live there. The app's only UI beyond pairing is its live log
   and (milestone b) the region picker.
+- **Featherweight beside the game.** Gamers notice; no feature is worth frame
+  drops. Capture is sampled (not streamed), cropped on the GPU, OCR runs only
+  when the watched pixels change, steady state allocates nothing, and the
+  process runs below normal priority so the game always wins the CPU.
 
 ## The contract
 

@@ -107,4 +107,98 @@ internal static class CaptureInterop
     {
         void GetBuffer(out byte* buffer, out uint capacity);
     }
+
+    // --- GPU-side crop -------------------------------------------------------
+    // Copying a whole monitor to the CPU twice a second is the kind of cost a
+    // gamer notices. These raw D3D11 calls copy just the chat-sized rectangle
+    // into a staging texture and read only that back — the full frame never
+    // crosses the bus. Vtable slots are stable ABI, same on every Windows.
+
+    [ComImport, Guid("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IDirect3DDxgiInterfaceAccess
+    {
+        IntPtr GetInterface(ref Guid iid);
+    }
+
+    public static readonly Guid ID3D11Device = new("db6f6ddb-ac77-4e88-8253-819df9bbf140");
+    public static readonly Guid ID3D11Texture2D = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+
+    /// <summary>The D3D11 object under a WinRT Direct3D wrapper (device or surface). Caller releases.</summary>
+    public static IntPtr GetD3DPointer(object direct3DObject, Guid iid) =>
+        direct3DObject.As<IDirect3DDxgiInterfaceAccess>().GetInterface(ref iid);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct D3D11_TEXTURE2D_DESC
+    {
+        public uint Width, Height, MipLevels, ArraySize, Format, SampleCount, SampleQuality, Usage, BindFlags, CPUAccessFlags, MiscFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct D3D11_BOX { public uint Left, Top, Front, Right, Bottom, Back; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct D3D11_MAPPED_SUBRESOURCE { public IntPtr Data; public uint RowPitch, DepthPitch; }
+
+    public static unsafe IntPtr CreateStagingTexture(IntPtr d3dDevice, int width, int height)
+    {
+        var desc = new D3D11_TEXTURE2D_DESC
+        {
+            Width = (uint)width,
+            Height = (uint)height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = 87,             // DXGI_FORMAT_B8G8R8A8_UNORM, what the frame pool produces
+            SampleCount = 1,
+            Usage = 3,               // D3D11_USAGE_STAGING
+            CPUAccessFlags = 0x20000 // D3D11_CPU_ACCESS_READ
+        };
+        IntPtr texture;
+        var hr = ((delegate* unmanaged[Stdcall]<IntPtr, D3D11_TEXTURE2D_DESC*, IntPtr, IntPtr*, int>)
+            (*(void***)d3dDevice)[5])(d3dDevice, &desc, IntPtr.Zero, &texture); // ID3D11Device::CreateTexture2D
+        Marshal.ThrowExceptionForHR(hr);
+        return texture;
+    }
+
+    public static unsafe IntPtr GetImmediateContext(IntPtr d3dDevice)
+    {
+        IntPtr context;
+        ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr*, void>)
+            (*(void***)d3dDevice)[40])(d3dDevice, &context); // ID3D11Device::GetImmediateContext
+        return context;
+    }
+
+    public static unsafe void CopyRegion(IntPtr context, IntPtr dstTexture, IntPtr srcTexture, Rectangle srcRect)
+    {
+        var box = new D3D11_BOX
+        {
+            Left = (uint)srcRect.Left,
+            Top = (uint)srcRect.Top,
+            Right = (uint)srcRect.Right,
+            Bottom = (uint)srcRect.Bottom,
+            Back = 1
+        };
+        ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, uint, uint, IntPtr, uint, D3D11_BOX*, void>)
+            (*(void***)context)[46])(context, dstTexture, 0, 0, 0, 0, srcTexture, 0, &box); // ID3D11DeviceContext::CopySubresourceRegion
+    }
+
+    /// <summary>Reads the staging texture into tightly packed BGRA rows.</summary>
+    public static unsafe void ReadTexture(IntPtr context, IntPtr stagingTexture, int width, int height, byte[] into)
+    {
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        var hr = ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, uint, D3D11_MAPPED_SUBRESOURCE*, int>)
+            (*(void***)context)[14])(context, stagingTexture, 0, 1 /* D3D11_MAP_READ */, 0, &mapped); // ID3D11DeviceContext::Map
+        Marshal.ThrowExceptionForHR(hr);
+        try
+        {
+            var rowBytes = width * 4;
+            fixed (byte* dst = into)
+                for (var y = 0; y < height; y++)
+                    Buffer.MemoryCopy((byte*)mapped.Data + y * mapped.RowPitch, dst + y * rowBytes, rowBytes, rowBytes);
+        }
+        finally
+        {
+            ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, void>)
+                (*(void***)context)[15])(context, stagingTexture, 0); // ID3D11DeviceContext::Unmap
+        }
+    }
 }
