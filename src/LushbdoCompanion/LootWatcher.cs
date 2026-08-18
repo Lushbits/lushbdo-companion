@@ -51,7 +51,6 @@ public sealed class LootWatcher : IDisposable
     private OcrEngine? _ocr;
     private int _scale;                // nearest-neighbour upscale — small chat text OCRs far better at 2×
     private SoftwareBitmap? _ocrInput; // allocated once, refilled per OCR pass
-    private Size _ocrInputSize;
     private byte[] _lastOcrImage = [];
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
     private readonly object _traceLock = new();
@@ -60,8 +59,11 @@ public sealed class LootWatcher : IDisposable
     private int _traceDumps;
     private TextKeyer? _keyer;         // trace-only preview of the planned per-frame keying
     private byte[] _keyedDump = [];
+    private byte[] _shadowRaw = [];    // the raw frame a shadow read will key and OCR
+    private SoftwareBitmap? _shadowInput;
     private const int TraceDumpEveryPasses = 20;  // one snapshot set ~every 20 s of activity
     private const int TraceDumpCap = 60;          // 3 PNGs per set; ≤ ~50 MB per session
+    private const int ShadowEveryPasses = 5;      // tracing only: OCR the keyed raw frame too, for the A/B
     private long _framesCaptured;
     private long _ocrPasses;
     private long _pickups;
@@ -278,9 +280,15 @@ public sealed class LootWatcher : IDisposable
             if (_lastOcrImage.Length != length) _lastOcrImage = new byte[length];
             _stabilizer.Stabilized.AsSpan(0, length).CopyTo(_lastOcrImage);
             MaybeDumpStabilized(frame);
+            var shadow = _trace is not null && _ocrPasses % ShadowEveryPasses == 0;
+            if (shadow)
+            {
+                if (_shadowRaw.Length != length) _shadowRaw = new byte[length];
+                frame.Pixels.AsSpan(0, length).CopyTo(_shadowRaw);
+            }
             FillOcrInput();
             release = false; // RecognizeAsync owns the flag now
-            _ = RecognizeAsync();
+            _ = RecognizeAsync(shadow);
         }
         finally
         {
@@ -288,22 +296,23 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private unsafe void FillOcrInput()
+    private void FillOcrInput() => FillInput(_stabilizer.Stabilized, ref _ocrInput);
+
+    private unsafe void FillInput(byte[] source, ref SoftwareBitmap? target)
     {
         var size = new Size(_stabilizer.Width, _stabilizer.Height);
-        if (_ocrInput is null || size != _ocrInputSize)
+        if (target is null || target.PixelWidth != size.Width * _scale || target.PixelHeight != size.Height * _scale)
         {
-            _ocrInput?.Dispose();
-            _ocrInput = new SoftwareBitmap(BitmapPixelFormat.Bgra8, size.Width * _scale, size.Height * _scale, BitmapAlphaMode.Ignore);
-            _ocrInputSize = size;
+            target?.Dispose();
+            target = new SoftwareBitmap(BitmapPixelFormat.Bgra8, size.Width * _scale, size.Height * _scale, BitmapAlphaMode.Ignore);
         }
 
-        using var buffer = _ocrInput.LockBuffer(BitmapBufferAccessMode.Write);
+        using var buffer = target.LockBuffer(BitmapBufferAccessMode.Write);
         using var reference = buffer.CreateReference();
         reference.As<CaptureInterop.IMemoryBufferByteAccess>().GetBuffer(out var dst, out _);
         var desc = buffer.GetPlaneDescription(0);
 
-        fixed (byte* src = _stabilizer.Stabilized)
+        fixed (byte* src = source)
         {
             var srcStride = size.Width * 4;
             for (var y = 0; y < size.Height * _scale; y++)
@@ -316,7 +325,7 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private async Task RecognizeAsync()
+    private async Task RecognizeAsync(bool shadow)
     {
         try
         {
@@ -342,6 +351,23 @@ public sealed class LootWatcher : IDisposable
             }
             TracePass(lines);
             _board.Ingest(lines);
+
+            // The A/B for the median's successor: while tracing, some passes
+            // also OCR the *keyed raw frame* — one crisp scroll state, no
+            // temporal smear — and record what that pipeline would have
+            // read. Diagnostics only; the board never sees these lines.
+            if (shadow && !_disposed && _trace is not null)
+            {
+                var length = _stabilizer.Width * _stabilizer.Height * 4;
+                if (_shadowRaw.Length == length)
+                {
+                    _keyer ??= new TextKeyer();
+                    if (_keyedDump.Length != length) _keyedDump = new byte[length];
+                    _keyer.Key(_shadowRaw, _stabilizer.Width, _stabilizer.Height, _keyedDump);
+                    FillInput(_keyedDump, ref _shadowInput);
+                    TraceShadow(await _ocr.RecognizeAsync(_shadowInput));
+                }
+            }
         }
         catch (Exception e)
         {
@@ -350,6 +376,22 @@ public sealed class LootWatcher : IDisposable
         finally
         {
             Volatile.Write(ref _ocrBusy, 0);
+        }
+    }
+
+    private void TraceShadow(OcrResult result)
+    {
+        if (_trace is null) return;
+        lock (_traceLock)
+        {
+            if (_trace is null) return;
+            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  === shadow keyed-raw read — {result.Lines.Count} line(s)");
+            foreach (var line in result.Lines)
+            {
+                var text = line.Text.Trim();
+                if (text.Length == 0 || line.Words.Count == 0) continue;
+                _trace.WriteLine($"             y={line.Words[0].BoundingRect.Y / _scale,6:F1}  \"{text}\"");
+            }
         }
     }
 
@@ -404,6 +446,9 @@ public sealed class LootWatcher : IDisposable
             _trace = null;
         }
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
+        {
             _ocrInput?.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
+            _shadowInput?.Dispose();
+        }
     }
 }
