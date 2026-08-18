@@ -214,6 +214,34 @@ public class LineBoardTests
     }
 
     [Fact]
+    public void UniqueLinesOverruleDuplicatesFakingABackwardsScroll()
+    {
+        // Identical lines stacked a row apart vote coherently for their own
+        // spacing — enough, in a heavy burst with the survivors mangled, to
+        // win the full vote with a small downward shift twice in a row and
+        // two-strike the persistence gate (field log, 20:58:35: 12
+        // unconfirmed seal lines dumped). The texts that cannot alias —
+        // visible once, tracked once — arbitrate: they pin the true shift,
+        // and the burst is counted, not dumped.
+        const string pouch = "You have obtained [Sea Monster's Spirit Pouch] x19. (20:19)";
+        const string skin = "You have obtained [Young Ocean Stalker's Skin] x16. (20:19)";
+        const string plywood = "You have obtained [Island Tree Coated Plywood] x3. (20:19)";
+        const string salt = "You have obtained [Rock Salt Ingot] x2. (20:19)";
+
+        Pass((pouch, 0), (skin, 20), (salt, 40), (skin, 60), (plywood, 80)); // baseline
+        Pass((pouch, 0), (skin, 20), (salt, 40), (skin, 60), (plywood, 80));
+        // Four drops in one gulp: the chat scrolls up 80px, only the bottom
+        // line survives, and the new pouch/skin pairs repeat the pattern.
+        Pass((plywood, 0), (pouch, 20), (skin, 40), (pouch, 60), (skin, 80));
+        Pass((plywood, 0), (pouch, 20), (skin, 40), (pouch, 60), (skin, 80));
+
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
+        Assert.Equal(4, _emitted.Count);
+        Assert.Equal(2, _emitted.Count(e => e is ("Sea Monster's Spirit Pouch", 19, _)));
+        Assert.Equal(2, _emitted.Count(e => e is ("Young Ocean Stalker's Skin", 16, _)));
+    }
+
+    [Fact]
     public void NewCopiesOfLinesAlreadyOnScreenAreCountedNotSwallowed()
     {
         // The other face of duplicate voting: when it drags the shift to

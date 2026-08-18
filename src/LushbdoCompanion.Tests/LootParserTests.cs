@@ -77,6 +77,26 @@ public class LootParserTests
         Assert.Equal("Deep Tide-Dyed Standardized Timber", r.Name);
     }
 
+    [Fact]
+    public void AWrapInsideParensIsStillAWrap()
+    {
+        var r = LootParser.Parse("You have obtained [Cox Pirates' Artifact (Combat");
+        Assert.Equal(LootParser.Kind.NameOpen, r.Kind);
+        Assert.Equal("Cox Pirates' Artifact (Combat", r.Name);
+    }
+
+    [Theory]
+    [InlineData("You have obtained [Sea Monster's Ooze) x36. (20:57)")] // ] misread as ) — field log, 20:58:31
+    [InlineData("You have obtained [Cox Pirates Extermination Seal). (20:58)")]
+    [InlineData("You have obtained [Rough Stone) x23.")]
+    public void AMisreadCloseBracketIsAWholeLineNotAWrap(string line)
+    {
+        // A real wrap fragment never carries the line's tail; a count or
+        // timestamp at the end means the `]` mangled. Unrecognized loses the
+        // consensus vote to the clean reading instead of stealing the line.
+        Assert.Equal(LootParser.Kind.Unrecognized, LootParser.Parse(line).Kind);
+    }
+
     [Theory]
     [InlineData("Square] x4. (20:25)", "Square", 4)]
     [InlineData("Square]. (20:25)", "Square", 1)] // single pickup wrapped mid-name

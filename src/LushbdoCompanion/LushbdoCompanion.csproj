@@ -1,8 +1,8 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- 10.0.19041 stays the OS floor — it is what makes
+    <!-- 10.0.19041 stays the OS floor â€” it is what makes
          Windows.Graphics.Capture and Windows.Media.Ocr reachable. Targeting
          22621 additionally projects the Windows 11 API that turns off the
          yellow capture border; its use is runtime-guarded via ApiInformation,
@@ -16,7 +16,7 @@
          share one physical-pixel space; the crop copies pixels by pointer. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <AssemblyTitle>Lushbdo Companion</AssemblyTitle>
     <Product>Lushbdo Companion</Product>
     <!-- Self-contained single file keeps "download the app" one .exe: the
