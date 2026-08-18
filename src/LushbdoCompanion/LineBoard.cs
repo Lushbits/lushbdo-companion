@@ -228,6 +228,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             if (t.HasLootShape && t.Y > bottom) bottom = t.Y;
         if (bottom == double.MinValue) bottom = _trackers[^1].Y; // no loot-shaped rows yet — best we have
         var newBudget = dy < 0 ? (int)Math.Round(-dy / MedianRowPitch(lines)) : 0;
+        trace?.Invoke($"gate  loot-bottom y={bottom:F0} (board-bottom y={_trackers[^1].Y:F0}), budget {newBudget}");
 
         MatchAndTrack(lines, bottom, newBudget);
         DropDepartedTrackers();
@@ -456,7 +457,12 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                     $"skip  \"{t.SettledText}\" — wrapped line whose quantity never arrived",
                 { SettledText: not null, Settled.Kind: LootParser.Kind.NameOpen } =>
                     $"skip  \"{t.SettledText}\" — wrapped name whose ending never arrived",
-                _ => $"skip  \"{ModalReading(t)}\" — never read cleanly before it scrolled away"
+                // Two honest endings: the row left the top of the region, or
+                // the board lost its grip — readings stopped landing on the
+                // tracker (a mis-voted shift, a duplicate stealing its row)
+                // while the row itself may well still be on screen.
+                _ when scrolledOff => $"skip  \"{ModalReading(t)}\" — never read cleanly before it scrolled away",
+                _ => $"skip  \"{ModalReading(t)}\" — lost its row before reading cleanly (still on screen, but the board lost its grip)"
             });
         }
 
