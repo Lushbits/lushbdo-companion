@@ -26,6 +26,10 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Native libs (the WindowsDesktop pack's *_cor3.dll set) ride inside the
+         exe too and self-extract at first run; without this they land as
+         loose DLLs beside the exe and break the one-file release. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
