@@ -35,6 +35,8 @@ public class LootParserTests
     [InlineData("You have obtained [Black Gem] x1,275. (19:12)", 1275)]
     [InlineData("You have obtained [Rough Stone] x23", 23)] // period wrapped to the next visual line
     [InlineData("You have obtained [Flax Thread] x3. (2:07)", 3)] // one-digit hour
+    [InlineData("You have obtained [Wolf Blood] x8. (23:07}", 8)] // } closer — keyed reads mangle the paren
+    [InlineData("You have obtained [Wolf Blood] x16. (23:07", 16)] // closer lost entirely
     public void QuantityVariants(string line, int count)
     {
         var r = LootParser.Parse(line);
