@@ -16,6 +16,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
     private LootWatcher? _watcher;
+    private LootSender? _sender;
     private bool _updateBalloonShown;
 
     public TrayContext()
@@ -167,7 +168,27 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_watcher is not null || _settings.Region is not { } region) return;
 
-        var watcher = new LootWatcher(region, _log.Append);
+        LootSender? sender = null;
+        if (_settings.IsPaired)
+        {
+            // Revoked fires on a worker thread; the menu and balloon live on
+            // this one.
+            var ui = SynchronizationContext.Current;
+            sender = new LootSender(_client, _log.Append);
+            sender.Revoked += why => ui?.Post(_ =>
+            {
+                StopWatching("Watching stopped — the site rejected this device's token. Pair again from the site's " +
+                             "Devices page, then paste the new token in Settings.");
+                _icon.ShowBalloonTip(10_000, "Lushbdo Companion",
+                    "The site rejected this device's token — loot is no longer being sent.", ToolTipIcon.Warning);
+            }, null);
+        }
+        else
+        {
+            _log.Append("Not paired — reading the loot log but sending nothing. Paste a device token in Settings to feed your sessions.");
+        }
+
+        var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add);
         try
         {
             await watcher.StartAsync();
@@ -175,15 +196,17 @@ public sealed class TrayContext : ApplicationContext
         catch (Exception e)
         {
             watcher.Dispose();
+            sender?.Dispose();
             _log.Append($"Could not start watching: {e.Message}");
             ShowLog();
             return;
         }
 
         _watcher = watcher;
+        _sender = sender;
         _watchItem.Text = "Stop watching";
-        _log.Append("Watching the loot log. Every line OCR reads is printed here; nothing is sent to the site yet — " +
-                    "that needs milestone (c)'s dedup, because the same lines stay on screen across frames.");
+        _log.Append("Watching the loot log. New pickups are confirmed across frames, then sent to your running gather " +
+                    "session in small batches — start one on the site and play.");
         ShowLog();
     }
 
@@ -191,6 +214,8 @@ public sealed class TrayContext : ApplicationContext
     {
         _watcher?.Dispose();
         _watcher = null;
+        _sender?.Dispose();
+        _sender = null;
         _watchItem.Text = "Start watching";
         _log.Append(message);
     }
@@ -264,6 +289,7 @@ public sealed class TrayContext : ApplicationContext
     private void Quit()
     {
         _watcher?.Dispose();
+        _sender?.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
         Application.Exit();
