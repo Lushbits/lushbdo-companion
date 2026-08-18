@@ -12,7 +12,11 @@ namespace LushbdoCompanion;
 /// recorded readings votes for the shift that would explain it — which keys
 /// alignment on stable text, not pixels (#2: raw pixels fail over the
 /// transparent background, and the stabilized image ghosts for the first few
-/// ticks after a scroll, exactly when alignment matters most).
+/// ticks after a scroll, exactly when alignment matters most). Each distinct
+/// text carries one text's worth of vote no matter how many places it shows:
+/// burst loot is near-identical (same items, same counts, same minute) and
+/// its duplicate matches are periodic — unnormalized, they out-vote the few
+/// unique lines that pin the true shift.
 ///
 /// Emission is gated by reading consensus: nothing is ever sent on one
 /// frame's word. A tracker emits once, when some parseable reading has
@@ -20,7 +24,8 @@ namespace LushbdoCompanion;
 /// repeats. Every ambiguity resolves the same direction — a visible
 /// undercount, never a double count and never a guess: lines visible at
 /// start are baseline and never sent, a lost alignment resets to baseline,
-/// backwards scrolling resets to baseline, a wrapped head whose tail never
+/// backwards scrolling that persists resets to baseline (one backwards vote
+/// only holds fire — a burst can fake one), a wrapped head whose tail never
 /// arrives is skipped aloud.
 ///
 /// Single-threaded by contract: the watcher's one-OCR-in-flight gate is the
@@ -33,6 +38,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
 
     private const int StaleAfterPasses = 6;     // vanished this long → the line is gone (faded, cleared)
     private const int NullPassesBeforeReset = 3; // no text matched anything this long → we are lost
+    private const int BackwardsPassesBeforeReset = 2; // consecutive backwards votes before they are believed
     private const int MaxTrackers = 64;
     private const int MaxReadingsPerTracker = 12;
     private const double DyBinPx = 3.0;
@@ -54,6 +60,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     private readonly List<OcrLineInput> _lastLines = [];
     private bool _baselinePending = true;
     private int _nullPasses;
+    private int _backwardsPasses;
     private double _lineHeight = 18;
 
     /// <summary>True while any tracked line still awaits consensus or a wrapped tail.</summary>
@@ -68,7 +75,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     public void Reconfirm()
     {
         if (_baselinePending || _lastLines.Count == 0 || !HasUnsettled) return;
-        IngestCore(_lastLines);
+        IngestCore(_lastLines, fresh: false);
     }
 
     public void Ingest(IReadOnlyList<OcrLineInput> lines)
@@ -76,13 +83,13 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         _lastLines.Clear();
         _lastLines.AddRange(lines);
         _lastLines.Sort((a, b) => a.Y.CompareTo(b.Y));
-        IngestCore(_lastLines);
+        IngestCore(_lastLines, fresh: true);
     }
 
     /// <summary>The screen is no longer the screen we knew (resize, restart). Everything visible next is old.</summary>
     public void Reset(string reason) => ResetForRealign(reason);
 
-    private void IngestCore(List<OcrLineInput> lines)
+    private void IngestCore(List<OcrLineInput> lines, bool fresh)
     {
         if (lines.Count > 0)
             _lineHeight = Math.Clamp(MedianHeight(lines), 8, 64);
@@ -109,12 +116,19 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             dy = voted;
             if (dy > _lineHeight)
             {
-                // Content moved DOWN: the member scrolled the tab backwards.
-                // Everything "revealed" below is old lines we already counted,
-                // indistinguishable from new ones — realign rather than repeat.
-                ResetForRealign("the chat scrolled backwards");
+                // Content moved DOWN: the member scrolled the tab backwards —
+                // or a loot burst's duplicate votes faked it for one pass. A
+                // real backwards scroll keeps voting backwards because the
+                // board holds still; a burst moves on. So hold — match
+                // nothing, emit nothing — and realign only when a second
+                // fresh read agrees: everything "revealed" below is then old
+                // lines we already counted, indistinguishable from new ones —
+                // realign rather than repeat.
+                if (fresh && ++_backwardsPasses >= BackwardsPassesBeforeReset)
+                    ResetForRealign("the chat scrolled backwards");
                 return;
             }
+            if (fresh) _backwardsPasses = 0;
         }
         else if (_trackers.TrueForAll(t => !t.Emitted))
         {
@@ -164,22 +178,40 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
 
     private double? VoteScroll(List<OcrLineInput> lines)
     {
-        Dictionary<int, (int Weight, double DySum)>? bins = null;
+        // A text visible k times against m trackers holding it makes k×m
+        // pairs, at most one per visible copy true. Splitting each text's
+        // vote across its pairs caps every text at one text's worth of say:
+        // a burst of near-identical drops casts its duplicate votes at pitch
+        // multiples — coherent enough, unnormalized, to out-vote the unique
+        // lines that pin the true shift and read as a backwards scroll.
+        Dictionary<string, int>? pairCounts = null;
         foreach (var line in lines)
         {
             foreach (var t in _trackers)
             {
-                if (!t.Readings.TryGetValue(line.Text, out var weight)) continue;
+                if (!t.Readings.ContainsKey(line.Text)) continue;
+                pairCounts ??= new Dictionary<string, int>(StringComparer.Ordinal);
+                pairCounts.TryGetValue(line.Text, out var n);
+                pairCounts[line.Text] = n + 1;
+            }
+        }
+        if (pairCounts is null) return null;
+
+        Dictionary<int, (double Weight, double DySum)> bins = [];
+        foreach (var line in lines)
+        {
+            foreach (var t in _trackers)
+            {
+                if (!t.Readings.TryGetValue(line.Text, out var reads)) continue;
+                var weight = (double)reads / pairCounts[line.Text];
                 var dy = line.Y - t.Y;
                 var bin = (int)Math.Round(dy / DyBinPx);
-                bins ??= [];
                 bins.TryGetValue(bin, out var acc);
                 bins[bin] = (acc.Weight + weight, acc.DySum + dy * weight);
             }
         }
-        if (bins is null) return null;
 
-        var best = default(KeyValuePair<int, (int Weight, double DySum)>);
+        var best = default(KeyValuePair<int, (double Weight, double DySum)>);
         foreach (var bin in bins)
         {
             // Ties break toward the smaller shift: with nothing to tell two
@@ -264,9 +296,14 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             if (stale && !scrolledOff) emptiedByStaleness = true;
             if (t.Emitted) continue;
 
-            note(t is { SettledText: not null, Settled.Kind: LootParser.Kind.NameOnly }
-                ? $"skip  \"{t.SettledText}\" — wrapped line whose quantity never arrived"
-                : $"skip  \"{ModalReading(t)}\" — never read cleanly before it scrolled away");
+            note(t switch
+            {
+                { SettledText: not null, Settled.Kind: LootParser.Kind.NameOnly } =>
+                    $"skip  \"{t.SettledText}\" — wrapped line whose quantity never arrived",
+                { SettledText: not null, Settled.Kind: LootParser.Kind.NameOpen } =>
+                    $"skip  \"{t.SettledText}\" — wrapped name whose ending never arrived",
+                _ => $"skip  \"{ModalReading(t)}\" — never read cleanly before it scrolled away"
+            });
         }
 
         if (_trackers.Count == 0 && emptiedByStaleness)
@@ -319,6 +356,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                     break;
 
                 case LootParser.Kind.NameOnly:
+                case LootParser.Kind.NameOpen:
                     EmitWrappedHead(t, i < _trackers.Count - 1 ? _trackers[i + 1] : null);
                     break;
 
@@ -336,15 +374,26 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                     t.Emitted = true;
                     note($"skip  \"{t.SettledText}\" — a stray quantity with no line to belong to");
                     break;
+
+                case LootParser.Kind.NameTail:
+                    // Same contract as QuantityTail: only ever consumed by
+                    // the open-bracket head directly above. Unclaimed means
+                    // that head never settled — never guess whose name it
+                    // finishes.
+                    t.Emitted = true;
+                    note($"skip  \"{t.SettledText}\" — the rest of a wrapped name whose start never settled");
+                    break;
             }
         }
     }
 
     private void EmitWrappedHead(Tracker head, Tracker? below)
     {
-        // A long name wraps, splitting the name from its quantity (#2):
-        // `You have obtained [Secret Book of the Forgotten Adventurer]` then
-        // `x4. (18:51)` as the next visual line. Wait for the tail to settle.
+        // A long line wraps (#2): after the bracketed name — `You have
+        // obtained [Secret Book of the Forgotten Adventurer]` then
+        // `x4. (18:51)` — or mid-name — `You have obtained [Deep Tide-Dyed
+        // Standardized Timber` then `Square] x4. (20:25)` as the next visual
+        // line. Wait for the tail to settle.
         if (below is null || Math.Abs(below.Y - head.Y) > 1.8 * _lineHeight)
         {
             // Nothing below (yet) — the tail may still be rendering. The
@@ -353,7 +402,36 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         }
         if (below.SettledText is null && !below.Emitted) return; // tail still gathering consensus
 
-        switch (below is { Emitted: false, SettledText: not null } ? below.Settled.Kind : LootParser.Kind.Unrecognized)
+        var tailKind = below is { Emitted: false, SettledText: not null } ? below.Settled.Kind : LootParser.Kind.Unrecognized;
+
+        if (head.Settled.Kind == LootParser.Kind.NameOpen)
+        {
+            if (tailKind == LootParser.Kind.NameTail)
+            {
+                head.Emitted = true;
+                below.Emitted = true;
+                // The game wraps at a word boundary; the halves rejoin with
+                // the one space the wrap swallowed. Both halves ship raw.
+                var name = $"{head.Settled.Name} {below.Settled.Name}".Trim();
+                if (name.Length == 0)
+                    note($"skip  \"{head.SettledText} ⏎ {below.SettledText}\" — a wrapped name that read as nothing");
+                else if (name == "Silver")
+                    note($"skip  \"{head.SettledText} ⏎ {below.SettledText}\" — silver is currency, not sent");
+                else
+                    emit(name, below.Settled.Count, $"{head.SettledText} ⏎ {below.SettledText}");
+            }
+            else
+            {
+                // Only a NameTail can finish an open bracket. Anything else
+                // below means the rest of this name is unrecoverable — and a
+                // knowingly incomplete name is never sent.
+                head.Emitted = true;
+                note($"skip  \"{head.SettledText}\" — wrapped name whose ending never arrived");
+            }
+            return;
+        }
+
+        switch (tailKind)
         {
             case LootParser.Kind.QuantityTail:
                 head.Emitted = true;
@@ -382,6 +460,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         _lastLines.Clear();
         _baselinePending = true;
         _nullPasses = 0;
+        _backwardsPasses = 0;
         note(unconfirmed > 0
             ? $"Realigning ({reason}) — {unconfirmed} unconfirmed line(s) skipped; what is on screen now is treated as old."
             : $"Realigning ({reason}) — what is on screen now is treated as old.");
