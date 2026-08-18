@@ -8,13 +8,15 @@ using WinRT;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The eyes: region pixels arrive from an IFrameSource, get compared against
-/// the previous frame, and only when they actually changed are they upscaled
-/// and OCR'd — a static chat costs one vectorized memory compare per tick and
-/// nothing else, which is what lets this sit beside a running game. Every
-/// line read is printed to the log. Milestone (b) deliberately stops there —
-/// the same lines stay on screen across frames, so sending them before
-/// milestone (c)'s scroll dedup would double-count massively.
+/// The eyes: region pixels arrive from an IFrameSource cut out of the game
+/// window itself, get compared against the previous frame, and only when they
+/// actually changed are they upscaled and OCR'd — a static chat costs one
+/// vectorized memory compare per tick and nothing else, which is what lets
+/// this sit beside a running game. The source owns the game window's
+/// lifecycle (waiting for it, re-finding it after a restart); this class only
+/// reads. Every line read is printed to the log. Milestone (b) deliberately
+/// stops there — the same lines stay on screen across frames, so sending them
+/// before milestone (c)'s scroll dedup would double-count massively.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
@@ -24,7 +26,7 @@ public sealed class LootWatcher : IDisposable
     /// <summary>A quiet log line this often, so a silent log can only mean capture died.</summary>
     private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromMinutes(2);
 
-    private readonly Rectangle _region;
+    private readonly Rectangle _region; // window-relative physical pixels, from the region picker
     private readonly Action<string> _log;
     private readonly IFrameSource _source;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
@@ -54,22 +56,15 @@ public sealed class LootWatcher : IDisposable
         _ocr = CreateEnglishOcrEngine() ?? throw new InvalidOperationException(
             "Windows has no OCR language installed — add English (United States) under Settings → Time & language → Language.");
 
-        var (monitor, monitorBounds) = CaptureInterop.MonitorFor(_region);
-        var crop = Rectangle.Intersect(_region, monitorBounds);
-        if (crop.Width < 8 || crop.Height < 8)
-            throw new InvalidOperationException("the saved region is not on any monitor any more — pick it again.");
-        if (crop != _region)
-            _log("The region hangs off its monitor's edge; watching the part that fits.");
-        crop.Offset(-monitorBounds.X, -monitorBounds.Y);
-
         var max = (int)OcrEngine.MaxImageDimension;
-        if (crop.Width > max || crop.Height > max)
+        if (_region.Width > max || _region.Height > max)
             throw new InvalidOperationException($"the region is bigger than OCR allows ({max}px) — drag it around just the loot chat.");
-        _scale = crop.Width * 2 <= max && crop.Height * 2 <= max ? 2 : 1;
+        _scale = _region.Width * 2 <= max && _region.Height * 2 <= max ? 2 : 1;
 
         _source.Tick += OnTick;
         _source.Failed += OnFailed;
-        await _source.StartAsync(monitor, crop, FramePace);
+        _source.Status += _log;
+        await _source.StartAsync(_region, FramePace);
     }
 
     private void OnTick(RegionFrame? tick)
@@ -80,7 +75,9 @@ public sealed class LootWatcher : IDisposable
             if (tick is { } frame) ReadFrame(frame);
             if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
-                _log($"Still watching — {_framesCaptured} frames captured, {_ocrPasses} OCR passes, nothing new on screen.");
+                _log(_framesCaptured == 0
+                    ? "Still here — no game window captured yet."
+                    : $"Still watching — {_framesCaptured} frames captured, {_ocrPasses} OCR passes, nothing new on screen.");
                 _sinceLastLogged.Restart();
             }
         }
@@ -201,6 +198,7 @@ public sealed class LootWatcher : IDisposable
         _disposed = true;
         _source.Tick -= OnTick;
         _source.Failed -= OnFailed;
+        _source.Status -= _log;
         _source.Dispose();
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
             _ocrInput?.Dispose(); // otherwise the in-flight pass finishes and the GC takes it

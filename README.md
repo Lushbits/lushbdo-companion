@@ -44,27 +44,48 @@ Set the game up once:
   **opaque background**, at a **fixed position and size**.
 - English client (v1 reads English only).
 
-Then, from the tray icon: **Pick loot log region…** and drag a rectangle
-around that chat tab. The app starts watching: passive capture of those pixels
-at ~2 fps, OCR'd offline by Windows, every line printed to the log window. The
-log announces when capture is live and heartbeats every couple of minutes when
-nothing changes, so a silent log always means something is wrong.
+Then, from the tray icon: **Pick loot log region…**. The app finds the game's
+window, photographs one frame of it, and shows that still full-screen — drag a
+rectangle around the chat tab on it, Esc cancels. Because the frame comes from
+the game window's own surface, it does not matter what is covering the game at
+that moment: open the tray menu over a browser and the picker still shows a
+clean still of the chat. (If the game window cannot be found, the app falls
+back to picking on the live screen after a short "switch to the game"
+countdown.)
+
+The app then watches that region of the **game window itself — never the
+monitor**: passive capture at ~2 fps, OCR'd offline by Windows, every line
+printed to the log window. Capturing the window's own surface means:
+
+- **The app can only ever see the game, never the desktop.** Other windows
+  crossing the region are structurally invisible to it — there is no pixel of
+  anything but the game it could ever read.
+- Tabbing away neither blinds nor contaminates the watcher: the game's surface
+  keeps being read behind whatever covers it.
+- The region sticks to the game window, so it survives the window moving and
+  the game restarting.
+- The game not running is not an error. The watcher says it is waiting for the
+  game window and starts by itself once the game is up — same again after the
+  game exits and relaunches.
+
+The log announces when capture is live and heartbeats every couple of minutes
+when nothing changes, so a silent log always means something is wrong.
 
 In this milestone the lines are **logged only, never sent** — until scroll
 dedup lands (milestone c), consecutive frames re-read the same lines and
 sending them would double-count. Open the log, play, and watch what it reads.
 
-On Windows 11 the app asks the OS to skip the yellow "this screen is being
+On Windows 11 the app asks the OS to skip the yellow "this window is being
 captured" border and usually may. On Windows 10 that API does not exist: the
-border around the captured monitor is unavoidable there, same as with OBS.
+border around the game window is unavoidable there, same as with OBS.
 
 ### Built to sit beside a running game
 
-- Capture is the same compositor path OBS uses, but sampled, not streamed:
-  the app drains the frame pool twice a second and the compositor skips it
-  entirely in between.
+- Capture is the same compositor path OBS uses — window capture, its least
+  invasive mode — but sampled, not streamed: the app drains the frame pool
+  twice a second and the compositor skips it entirely in between.
 - The region is cropped on the GPU — only the chat-sized rectangle ever
-  crosses to the CPU, never the whole monitor.
+  crosses to the CPU, never the whole window.
 - OCR runs only when the region's pixels actually changed; a static chat
   costs one memory compare per tick (fractions of a millisecond).
 - Buffers are allocated once and reused — the steady state allocates

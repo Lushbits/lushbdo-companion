@@ -2,7 +2,10 @@ namespace LushbdoCompanion;
 
 /// <summary>
 /// A one-shot, whole-desktop overlay: drag a rectangle around the game's loot
-/// chat tab, Esc cancels. Everything here is physical screen pixels — the app
+/// chat tab, Esc cancels. Since the game window became the capture target this
+/// is the fallback picker, used only when that window cannot be found — the
+/// selection comes back in screen pixels and the caller must anchor it to the
+/// game window itself. Everything here is physical screen pixels — the app
 /// is per-monitor DPI aware precisely so the picked rectangle and the capture
 /// frames agree without any scaling arithmetic between them.
 /// </summary>
