@@ -44,6 +44,20 @@ public class LootParserTests
         Assert.Equal(count, r.Count);
     }
 
+    [Theory]
+    [InlineData("You have obtained @ [ [Event] Agent's Seal]. (23:44}", "[Event] Agent's Seal", 1)]
+    [InlineData("You have obtained [[Event] Agent's Seal]. (23:00)", "[Event] Agent's Seal", 1)]
+    public void NestedEventBracketsShipTheNameRaw(string line, string name, int count)
+    {
+        // Event items nest brackets; the first ] closes too early and the
+        // outermost one completes the line. The name ships raw, inner
+        // brackets and all — the server's matcher decides what it is.
+        var r = LootParser.Parse(line);
+        Assert.Equal(LootParser.Kind.Item, r.Kind);
+        Assert.Equal(name, r.Name);
+        Assert.Equal(count, r.Count);
+    }
+
     [Fact]
     public void DigitsInsideNamesAreNeverCleaned()
     {

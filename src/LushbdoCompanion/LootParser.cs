@@ -137,6 +137,21 @@ public static class LootParser
             return new Reading(Kind.NameOpen, fragment, 0);
         }
 
+        var reading = CompleteObtain(rest, open, close);
+        if (reading.Kind == Kind.Unrecognized)
+        {
+            // Event items nest brackets — `[[Event] Agent's Seal]` — and
+            // the first `]` closes too early. The name ships raw either
+            // way, inner brackets and all; try the outermost close before
+            // giving up.
+            var last = rest.LastIndexOf(']');
+            if (last > close) reading = CompleteObtain(rest, open, last);
+        }
+        return reading;
+    }
+
+    private static Reading CompleteObtain(string rest, int open, int close)
+    {
         var name = rest[(open + 1)..close].Trim();
         if (name.Length == 0) return new Reading(Kind.Unrecognized, "", 0);
 
