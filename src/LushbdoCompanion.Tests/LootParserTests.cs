@@ -69,6 +69,35 @@ public class LootParserTests
         Assert.Equal("Secret Book of the Forgotten Adventurer", r.Name);
     }
 
+    [Fact]
+    public void MidNameWrapLeavesAnOpenBracketHead()
+    {
+        var r = LootParser.Parse("You have obtained [Deep Tide-Dyed Standardized Timber");
+        Assert.Equal(LootParser.Kind.NameOpen, r.Kind);
+        Assert.Equal("Deep Tide-Dyed Standardized Timber", r.Name);
+    }
+
+    [Theory]
+    [InlineData("Square] x4. (20:25)", "Square", 4)]
+    [InlineData("Square]. (20:25)", "Square", 1)] // single pickup wrapped mid-name
+    [InlineData("Adventurer] x12.", "Adventurer", 12)]
+    public void TheRestOfAWrappedNameIsANameTail(string line, string name, int count)
+    {
+        var r = LootParser.Parse(line);
+        Assert.Equal(LootParser.Kind.NameTail, r.Kind);
+        Assert.Equal(name, r.Name);
+        Assert.Equal(count, r.Count);
+    }
+
+    [Theory]
+    [InlineData("Square]")]                    // no count, no dot — not enough shape to trust
+    [InlineData("Square] words after (20:25)")]
+    [InlineData("[Square] x4. (20:25)")]       // opens its own bracket — not a tail
+    public void BracketFragmentsWithoutATailShapeAreUnrecognized(string line)
+    {
+        Assert.Equal(LootParser.Kind.Unrecognized, LootParser.Parse(line).Kind);
+    }
+
     [Theory]
     [InlineData("x4. (18:51)", 4)]
     [InlineData("*23.", 23)]     // the x glyph is the least reliable on the line

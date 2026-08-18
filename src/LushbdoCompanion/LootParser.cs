@@ -8,8 +8,11 @@ namespace LushbdoCompanion;
 /// variant with comma grouping (`x1,275`, `[Silver] x995,374`), one junk token
 /// between the verb and the bracket where the item's icon lands in OCR, and
 /// wrapped lines whose quantity (`x4. (18:51)`) or bare timestamp (`(19:33)`)
-/// arrives as its own visual line. The bracket pair is the anchor — it
-/// survives frames where everything around it mangles.
+/// arrives as its own visual line. A name long enough wraps mid-bracket: the
+/// head ends without closing (`You have obtained [Deep Tide-Dyed Standardized
+/// Timber`) and the remainder closes a bracket it never opened
+/// (`Square] x4. (20:25)`). The bracket pair is the anchor — it survives
+/// frames where everything around it mangles.
 ///
 /// Two rules are load-bearing. The inner name is carried raw: digits are
 /// normal in names (`Gold Bar 1,000G`) and a "helpful" cleanup would turn a
@@ -26,6 +29,12 @@ public static class LootParser
 
         /// <summary>An obtain line that ends at the bracket — the quantity wrapped onto the next visual line.</summary>
         NameOnly,
+
+        /// <summary>An obtain line that wraps mid-name: the bracket opens and the line ends before it closes.</summary>
+        NameOpen,
+
+        /// <summary>The rest of a wrapped name: `Square] x4. (20:25)`. Meaningful only under a NameOpen head.</summary>
+        NameTail,
 
         /// <summary>An obtain line whose bracketed name is exactly "Silver" — currency, not a gatherable.</summary>
         Silver,
@@ -75,6 +84,19 @@ public static class LootParser
         if (QuantityTailShape.Match(text) is { Success: true } tail && TryCount(tail.Groups["n"].Value, out var tailCount))
             return new Reading(Kind.QuantityTail, "", tailCount);
 
+        // The rest of a name that wrapped mid-bracket: closes a bracket it
+        // never opened, then reads like any line's tail. The name part ships
+        // raw; whose name it finishes is the board's call, made by position.
+        var close = text.IndexOf(']');
+        if (close >= 0 && text.IndexOf('[') < 0 &&
+            TailAfterBracket.Match(text[(close + 1)..]) is { Success: true } after)
+        {
+            if (after.Groups["one"].Success)
+                return new Reading(Kind.NameTail, text[..close].Trim(), 1);
+            if (TryCount(after.Groups["n"].Value, out var nameTailCount))
+                return new Reading(Kind.NameTail, text[..close].Trim(), nameTailCount);
+        }
+
         return new Reading(Kind.Unrecognized, "", 0);
     }
 
@@ -82,8 +104,6 @@ public static class LootParser
     {
         var open = rest.IndexOf('[');
         if (open < 0) return new Reading(Kind.Unrecognized, "", 0);
-        var close = rest.IndexOf(']', open + 1);
-        if (close < 0) return new Reading(Kind.Unrecognized, "", 0);
 
         // The item's icon OCRs as a junk token between the verb and the
         // bracket (`O`, `e`, `A`, `4`, a bullet). Skip one short token; more
@@ -91,6 +111,14 @@ public static class LootParser
         var junk = rest[..open].Trim();
         if (junk.Length > 0 && (junk.Length > 3 || junk.Contains(' ')))
             return new Reading(Kind.Unrecognized, "", 0);
+
+        var close = rest.IndexOf(']', open + 1);
+        if (close < 0)
+        {
+            // Wrapped mid-name: the line ends inside the bracket and the
+            // rest arrives as a NameTail on the next visual line.
+            return new Reading(Kind.NameOpen, rest[(open + 1)..].Trim(), 0);
+        }
 
         var name = rest[(open + 1)..close].Trim();
         if (name.Length == 0) return new Reading(Kind.Unrecognized, "", 0);
