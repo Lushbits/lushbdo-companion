@@ -49,13 +49,20 @@ public sealed class FrameDelta
     private const int TopMargin = 6;
 
     /// <summary>
+    /// How much of a row has to mismatch, as a share of the pitch, before the
+    /// mismatch counts. Below this it is a clipped edge row or keyed scenery,
+    /// not content that changed.
+    /// </summary>
+    private const double MinChangedRun = 0.4;
+
+    /// <summary>
     /// What to read, in frame rows: from <paramref name="Top"/> (inclusive) to
     /// the bottom of the frame. <paramref name="Shift"/> is how far the content
     /// moved up since the last pass — 0 when it did not, and what carried-over
     /// readings have to be moved by. <paramref name="Whole"/> means the frame
     /// could not be lined up at all and nothing may be carried.
     /// </summary>
-    public readonly record struct Window(int Top, int Shift, bool Whole);
+    public readonly record struct Window(int Top, int Shift, bool Whole, int FirstChanged);
 
     private ulong[] _now = [];
     private ulong[] _before = [];
@@ -87,7 +94,7 @@ public sealed class FrameDelta
         if (!_havePrevious)
         {
             Keep();
-            return new Window(0, 0, Whole: true);
+            return new Window(0, 0, Whole: true, FirstChanged: 0);
         }
 
         var maxShift = Math.Min(height - 1, MaxShiftRows * rowPitch);
@@ -113,16 +120,30 @@ public sealed class FrameDelta
             // Not a scrolled version of the last frame — a teleport, a camera
             // turn that re-keyed everything, a cleared tab. Read it all.
             Keep();
-            return new Window(0, 0, Whole: true);
+            return new Window(0, 0, Whole: true, FirstChanged: 0);
         }
 
-        // The topmost scanline that does not line up. Everything above it is
-        // last pass's content, already read, and only has to be moved.
+        // The topmost scanline that does not line up — but only where the
+        // mismatch *persists*. A row that genuinely changed mismatches for its
+        // whole glyph band, fifteen scanlines or more. A row clipped by the
+        // region's top edge, showing a different sliver of itself each time
+        // the chat scrolls, mismatches for two or three and means nothing; so
+        // does a speck of keyed scenery. Taking the first isolated mismatch
+        // let one clipped row at the top open the window to the whole frame on
+        // 52 of 60 field passes (2026-08-24 22:34), which left this class
+        // contributing nothing at all.
+        var minRun = Math.Max(3, (int)(MinChangedRun * rowPitch));
         var firstChanged = height;
+        var run = 0;
         for (var y = 0; y + bestShift < height; y++)
         {
-            if (Same(_now[y], _before[y + bestShift])) continue;
-            firstChanged = y;
+            if (Same(_now[y], _before[y + bestShift]))
+            {
+                run = 0;
+                continue;
+            }
+            if (++run < minRun) continue;
+            firstChanged = y - run + 1;
             break;
         }
 
@@ -133,7 +154,7 @@ public sealed class FrameDelta
         top = Math.Clamp(top, 0, Math.Max(0, height - rowPitch));
 
         Keep();
-        return new Window(top, bestShift, Whole: top == 0);
+        return new Window(top, bestShift, Whole: top == 0, FirstChanged: firstChanged);
     }
 
     private void Keep()

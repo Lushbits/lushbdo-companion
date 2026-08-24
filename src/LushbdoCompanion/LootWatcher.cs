@@ -319,7 +319,8 @@ public sealed class LootWatcher : IDisposable
             var window = _delta.Compare(_keyed, _frameWidth, _frameHeight, (int)Math.Round(_rowPitch));
             if (_trace is not null)
                 Trace($"read  rows {window.Top}..{_frameHeight} of {_frameHeight}" +
-                      $" (scrolled {window.Shift}px{(window.Whole ? ", whole frame" : $", {_carried.Count} piece(s) carried")})");
+                      $" (scrolled {window.Shift}px, first change at {window.FirstChanged}" +
+                      $"{(window.Whole ? ", whole frame" : $", {_carried.Count} piece(s) carried")})");
 
             // The buffer and its shape are pinned here, while the flag is
             // held: a resize between now and the read landing would otherwise
