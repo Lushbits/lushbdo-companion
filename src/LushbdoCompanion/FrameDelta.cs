@@ -3,6 +3,23 @@ namespace LushbdoCompanion;
 /// <summary>
 /// Which part of the frame still has to be read.
 ///
+/// **Not on the watcher's path today, and the reason is worth keeping.** The
+/// arithmetic here is right and it halved the measured cost, but a partial
+/// read means handing the board the rows above the window already moved — and
+/// the board measures the scroll by voting on the text it is handed, so it
+/// reads dy 0 however far the chat really went. Its provenance gate authorises
+/// new lines only in proportion to that number, so the budget went to zero and
+/// genuinely new pickups at the bottom edge were never tracked at all: twenty
+/// Black Gem Fragment, twenty Fairy Powder and eight Fairy&apos;s Breath lost from
+/// one eight-minute run (field log, 2026-08-25 00:06).
+///
+/// Making it sound means the board taking the shift as told instead of voting
+/// it, which puts a pixel measurement on the path that decides how many new
+/// lines may exist — where being wrong is a double count, the one outcome this
+/// app may never produce. That needs its own field proof, not a tuning change.
+/// Until then this class serves the eval harness, and the watcher reads the
+/// whole frame.
+///
 /// PaddleOCR is the accurate reader and the expensive one — about 36 ms of one
 /// core per row, so re-reading a seventeen-row region twice a second is not a
 /// thing that can run beside a game. But most of those rows are the same rows

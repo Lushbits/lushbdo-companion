@@ -50,7 +50,6 @@ public sealed class LootWatcher : IDisposable
     private readonly Action<string, int>? _onLoot;
     private readonly IFrameSource _source;
     private readonly TextKeyer _keyer = new();
-    private readonly FrameDelta _delta = new();
     private readonly IOcrReader _reader;
     private readonly LineBoard _board;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
@@ -60,8 +59,6 @@ public sealed class LootWatcher : IDisposable
     private byte[] _keyed = [];        // this frame's keyed text: the change gate, and what the delta reads
     private byte[] _lastKeyed = [];    // the previous OCR pass's keyed text
     private byte[] _raw = [];          // this frame's pixels as captured — the source reuses its own buffer
-    private List<OcrRows.Piece> _carried = [];  // last pass's pieces, for the rows this pass did not re-read
-    private double _rowPitch = 24;     // measured from the last pass's rows; seeds the delta's shift search
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
     private readonly object _traceLock = new();
     private string? _traceDir;
@@ -136,19 +133,15 @@ public sealed class LootWatcher : IDisposable
     /// two rows came back as a bare "System You have obtained" and the log
     /// could not settle which).
     /// </summary>
-    private void TracePieces(List<OcrRows.Piece> pieces, int freshCount)
+    private void TracePieces(List<OcrRows.Piece> pieces)
     {
         if (_trace is null) return;
         lock (_traceLock)
         {
             if (_trace is null) return;
-            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  piece {pieces.Count} ({freshCount} read, {pieces.Count - freshCount} carried)");
-            for (var i = 0; i < pieces.Count; i++)
-            {
-                var p = pieces[i];
-                _trace.WriteLine($"             {(i < freshCount ? "read  " : "carry ")}" +
-                                 $"x={p.X,6:F1} y={p.Y,6:F1} h={p.Height,5:F1}  \"{p.Text}\"");
-            }
+            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  piece {pieces.Count}");
+            foreach (var p in pieces)
+                _trace.WriteLine($"             x={p.X,6:F1} y={p.Y,6:F1} h={p.Height,5:F1}  \"{p.Text}\"");
         }
     }
 
@@ -274,8 +267,6 @@ public sealed class LootWatcher : IDisposable
             _keyed = new byte[_frameWidth * _frameHeight * 4];
             _raw = new byte[_keyed.Length];
             _lastKeyed = [];
-            _delta.Reset();
-            _carried = [];
             _resetReason ??= "the watched region resized"; // everything visible next is old
         }
 
@@ -289,8 +280,6 @@ public sealed class LootWatcher : IDisposable
             {
                 _resetReason = null;
                 _board.Reset(reason);
-                _delta.Reset();  // nothing carried across a realign
-                _carried = [];
             }
 
             _keyer.Key(frame.Pixels, _frameWidth, _frameHeight, _keyed);
@@ -316,17 +305,32 @@ public sealed class LootWatcher : IDisposable
             // copy has to be taken before the read goes asynchronous.
             frame.Pixels.AsSpan(0, length).CopyTo(_raw);
 
-            var window = _delta.Compare(_keyed, _frameWidth, _frameHeight, (int)Math.Round(_rowPitch));
-            if (_trace is not null)
-                Trace($"read  rows {window.Top}..{_frameHeight} of {_frameHeight}" +
-                      $" (scrolled {window.Shift}px, first change at {window.FirstChanged}" +
-                      $"{(window.Whole ? ", whole frame" : $", {_carried.Count} piece(s) carried")})");
+            // The whole frame, every pass. Reading a strip and carrying the
+            // rows above it is sound arithmetic and was measured to halve the
+            // cost — but it is *not* sound against this board, and the field
+            // said so within four minutes (2026-08-25 00:06): carried rows are
+            // handed over already moved, so the board's text vote reads dy 0
+            // however far the chat actually scrolled. Its provenance gate
+            // authorises new lines only in proportion to that measurement, so
+            // budget went to 0 and genuinely new pickups at the bottom edge
+            // were never tracked. Twenty Black Gem Fragment, twenty Fairy
+            // Powder and eight Fairy's Breath went missing from one eight
+            // minute run.
+            //
+            // Making it sound means the board taking the shift as told rather
+            // than voting it, and that trades a text measurement for a pixel
+            // one on the path that decides how many new lines may exist —
+            // where being wrong is a double count, the one outcome this app
+            // may never produce. That is its own piece of work with its own
+            // field proof, not a tuning change. FrameDelta stays for the eval
+            // harness and for that work; the watcher reads everything.
+            if (_trace is not null) Trace($"read  rows 0..{_frameHeight} of {_frameHeight}");
 
             // The buffer and its shape are pinned here, while the flag is
             // held: a resize between now and the read landing would otherwise
             // hand the reader a freshly allocated frame mid-pass.
             release = false; // RecognizeAsync owns the flag now
-            _ = RecognizeAsync(_reader.ReadsKeyed ? _keyed : _raw, _frameWidth, _frameHeight, window);
+            _ = RecognizeAsync(_reader.ReadsKeyed ? _keyed : _raw, _frameWidth, _frameHeight);
         }
         finally
         {
@@ -334,38 +338,20 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private async Task RecognizeAsync(byte[] input, int width, int height, FrameDelta.Window window)
+    private async Task RecognizeAsync(byte[] input, int width, int height)
     {
         try
         {
-            var pieces = await _reader.ReadAsync(input, width, height, window.Top, height);
+            var pieces = await _reader.ReadAsync(input, width, height, 0, height);
             _ocrPasses++;
             if (_disposed) return;
-
-            // Everything above the read window was read on an earlier pass and
-            // has only moved. Carrying it is the same promise an unchanged
-            // frame makes — the reading still stands — and it is what makes
-            // reading a strip instead of a region legal: the board still sees
-            // every visible row, every pass.
-            var freshCount = pieces.Count;
-            if (!window.Whole)
-            {
-                foreach (var piece in _carried)
-                {
-                    var y = piece.Y - window.Shift;
-                    if (y + piece.Height <= window.Top && y + piece.Height > 0)
-                        pieces.Add(piece with { Y = y });
-                }
-            }
-            _carried = pieces;
-            TracePieces(pieces, freshCount);
+            TracePieces(pieces);
 
             // Fragments go through the row merge first (the icon column splits
             // a row), then to the board with their vertical position in
             // capture pixels — position on the scroll stream is identity; the
             // text alone cannot be (identical rows repeat).
             var rows = OcrRows.Merge(pieces);
-            _rowPitch = MeasureRowPitch(rows, _rowPitch);
             TracePass(rows);
             _board.Ingest(rows);
         }
@@ -377,24 +363,6 @@ public sealed class LootWatcher : IDisposable
         {
             Volatile.Write(ref _ocrBusy, 0);
         }
-    }
-
-    /// <summary>
-    /// The gap between adjacent visual rows, which is what the delta's shift
-    /// search is measured in. Same-row fragments sit at the same height and are
-    /// filtered out; a pass with nothing to measure keeps the last answer.
-    /// </summary>
-    private static double MeasureRowPitch(List<LineBoard.OcrLineInput> rows, double fallback)
-    {
-        List<double>? gaps = null;
-        for (var i = 1; i < rows.Count; i++)
-        {
-            var gap = rows[i].Y - rows[i - 1].Y;
-            if (gap >= 8) (gaps ??= []).Add(gap);
-        }
-        if (gaps is null) return fallback;
-        gaps.Sort();
-        return Math.Clamp(gaps[gaps.Count / 2], 8, 64);
     }
 
     private void OnConfirmedPickup(string name, int count, string settledReading)
