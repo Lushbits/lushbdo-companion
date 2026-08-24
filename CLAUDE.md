@@ -62,6 +62,16 @@ embedded resources that `OcrModels` unpacks to `%LOCALAPPDATA%` on first run.
 A `models\` folder beside the download would be an install, so the csproj
 undoes the copy RapidOcrNet's own targets make.
 
+One asterisk on "no runtime prereqs", and it is stated rather than papered
+over: `onnxruntime.dll` imports `MSVCP140`/`VCRUNTIME140`, so it needs the
+Visual C++ 2015-2022 redistributable. Black Desert installs it, so any machine
+that can run the game this app watches already has it — but a machine without
+it falls back to `WindowsOcrReader` with the reason in the log rather than
+failing to watch. `libSkiaSharp.dll` carries its own CRT and needs nothing.
+Nothing else here may grow a native dependency without that same check
+(`dumpbin /dependents`, or the PE import table): a prereq that fails on a
+member's PC is worse than a recognizer that reads a little worse.
+
 ## Versioning
 
 `<Version>` in the csproj; a release is tag `v<version>` + GitHub Release with
