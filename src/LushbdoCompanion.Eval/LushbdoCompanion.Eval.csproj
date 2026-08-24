@@ -19,9 +19,11 @@
     <Compile Include="..\LushbdoCompanion\TextKeyer.cs" Link="app\TextKeyer.cs" />
     <Compile Include="..\LushbdoCompanion\LineBoard.cs" Link="app\LineBoard.cs" />
     <Compile Include="..\LushbdoCompanion\OcrRows.cs" Link="app\OcrRows.cs" />
+    <Compile Include="..\LushbdoCompanion\FrameDelta.cs" Link="app\FrameDelta.cs" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="RapidOcrNet" Version="4.0.2" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.6" />
   </ItemGroup>
 

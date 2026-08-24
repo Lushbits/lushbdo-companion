@@ -1,9 +1,5 @@
 using System.Diagnostics;
 using System.Drawing;
-using Windows.Globalization;
-using Windows.Graphics.Imaging;
-using Windows.Media.Ocr;
-using WinRT;
 
 namespace LushbdoCompanion;
 
@@ -12,19 +8,28 @@ namespace LushbdoCompanion;
 /// window itself; every frame is keyed by <see cref="TextKeyer"/> — the
 /// game draws chat text as a bright core wrapped in a dark outline so it
 /// reads over anything, and keying keeps exactly that structure and
-/// flattens the animated world to black (#2, #18: measured 6× the readable
-/// rows of the retired temporal median, which smeared text over text the
-/// moment the chat scrolled). Each keyed frame is one crisp scroll state,
-/// OCR reads every frame the keyed text actually changed — at the owner's
-/// real loot pace (5–10 rows a second) a row lives ~2 s, and it needs two
-/// clean reads before it counts — and an unchanged keyed frame reconfirms
-/// the previous readings for free, which is what keeps an idle chat nearly
-/// free. OCR fragments that share a visual row are merged left to right
-/// (keying splits a row at the icon gap); the LineBoard sees whole rows,
-/// decides what is genuinely new, and hands confirmed pickups to the
-/// sender. Nothing is ever sent on one frame's word. The source owns the
-/// game window's lifecycle; a gap in frames means the game went away, and
-/// what follows one is a fresh baseline.
+/// flattens the animated world to black (#2, #18).
+///
+/// Keying is now the *gate*, not the reading. It answers "did the text
+/// change" per frame, which is what keeps an idle chat free whatever the
+/// world behind it is doing, and <see cref="FrameDelta"/> takes it further
+/// and answers "which rows changed" — so a pass reads the handful of rows
+/// that are new rather than the whole region. The reading itself is
+/// <see cref="IOcrReader"/>'s, and the default reader wants the raw frame
+/// instead: PaddleOCR is a scene-text model and a transparent chat over a
+/// moving world is its home ground, where it reads 963 of 1020 field rows
+/// against Windows.Media.Ocr's 550.
+///
+/// A row still needs two clean reads before it counts, and they must be two
+/// *different* frames — so the read window always reaches back over what
+/// arrived last pass, and rows above it keep the readings they already had.
+/// An unchanged keyed frame reconfirms all of them for free. OCR fragments
+/// that share a visual row are merged left to right (the icon column splits
+/// a row); the LineBoard sees whole rows, decides what is genuinely new, and
+/// hands confirmed pickups to the sender. Nothing is ever sent on one
+/// frame's word. The source owns the game window's lifecycle; a gap in
+/// frames means the game went away, and what follows one is a fresh
+/// baseline.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
@@ -45,16 +50,18 @@ public sealed class LootWatcher : IDisposable
     private readonly Action<string, int>? _onLoot;
     private readonly IFrameSource _source;
     private readonly TextKeyer _keyer = new();
+    private readonly FrameDelta _delta = new();
+    private readonly IOcrReader _reader;
     private readonly LineBoard _board;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
 
-    private OcrEngine? _ocr;
-    private int _scale;                // nearest-neighbour upscale — small chat text OCRs far better at 2×
-    private SoftwareBitmap? _ocrInput; // allocated once, refilled per OCR pass
     private int _frameWidth;
     private int _frameHeight;
-    private byte[] _keyed = [];        // this frame's keyed text, the OCR input
-    private byte[] _lastKeyed = [];    // the previous OCR pass's keyed text, the change gate
+    private byte[] _keyed = [];        // this frame's keyed text: the change gate, and what the delta reads
+    private byte[] _lastKeyed = [];    // the previous OCR pass's keyed text
+    private byte[] _raw = [];          // this frame's pixels as captured — the source reuses its own buffer
+    private List<OcrRows.Piece> _carried = [];  // last pass's pieces, for the rows this pass did not re-read
+    private double _rowPitch = 24;     // measured from the last pass's rows; seeds the delta's shift search
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
     private readonly object _traceLock = new();
     private string? _traceDir;
@@ -72,12 +79,14 @@ public sealed class LootWatcher : IDisposable
     private string _lastFailure = "";
     private volatile bool _disposed;
 
-    public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null, IFrameSource? source = null)
+    public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null,
+        IFrameSource? source = null, IOcrReader? reader = null)
     {
         _region = region;
         _log = log;
         _onLoot = onLoot;
         _source = source ?? new WgcFrameSource();
+        _reader = reader ?? new PaddleOcrReader();
         _board = new LineBoard(OnConfirmedPickup, OnBoardNote, Trace);
     }
 
@@ -180,13 +189,7 @@ public sealed class LootWatcher : IDisposable
 
     public async Task StartAsync()
     {
-        _ocr = CreateEnglishOcrEngine() ?? throw new InvalidOperationException(
-            "Windows has no OCR language installed — add English (United States) under Settings → Time & language → Language.");
-
-        var max = (int)OcrEngine.MaxImageDimension;
-        if (_region.Width > max || _region.Height > max)
-            throw new InvalidOperationException($"the region is bigger than OCR allows ({max}px) — drag it around just the loot chat.");
-        _scale = _region.Width * 2 <= max && _region.Height * 2 <= max ? 2 : 1;
+        await _reader.StartAsync(_region.Width, _region.Height);
 
         _source.Tick += OnTick;
         _source.Failed += OnFailed;
@@ -234,9 +237,8 @@ public sealed class LootWatcher : IDisposable
         if (!_announced)
         {
             _announced = true;
-            Log($"Capture is live: {frame.Width}×{frame.Height}px region, OCR in {_ocr!.RecognizerLanguage.DisplayName}" +
-                (_scale > 1 ? $" at {_scale}× upscale" : "") +
-                " — text keyed per frame.");
+            Log($"Capture is live: {frame.Width}×{frame.Height}px region, read by {_reader.Name}" +
+                " — text keyed per frame, and only the rows that changed are read.");
             _sinceLastLogged.Restart();
         }
 
@@ -245,7 +247,10 @@ public sealed class LootWatcher : IDisposable
             _frameWidth = frame.Width;
             _frameHeight = frame.Height;
             _keyed = new byte[_frameWidth * _frameHeight * 4];
+            _raw = new byte[_keyed.Length];
             _lastKeyed = [];
+            _delta.Reset();
+            _carried = [];
             _resetReason ??= "the watched region resized"; // everything visible next is old
         }
 
@@ -259,6 +264,8 @@ public sealed class LootWatcher : IDisposable
             {
                 _resetReason = null;
                 _board.Reset(reason);
+                _delta.Reset();  // nothing carried across a realign
+                _carried = [];
             }
 
             _keyer.Key(frame.Pixels, _frameWidth, _frameHeight, _keyed);
@@ -279,9 +286,21 @@ public sealed class LootWatcher : IDisposable
             if (_lastKeyed.Length != length) _lastKeyed = new byte[length];
             _keyed.AsSpan(0, length).CopyTo(_lastKeyed);
             MaybeDumpFrames(frame);
-            FillInput(_keyed, ref _ocrInput);
+
+            // The source reuses its pixel buffer between frames, so the raw
+            // copy has to be taken before the read goes asynchronous.
+            frame.Pixels.AsSpan(0, length).CopyTo(_raw);
+
+            var window = _delta.Compare(_keyed, _frameWidth, _frameHeight, (int)Math.Round(_rowPitch));
+            if (_trace is not null)
+                Trace($"read  rows {window.Top}..{_frameHeight} of {_frameHeight}" +
+                      $" (scrolled {window.Shift}px{(window.Whole ? ", whole frame" : $", {_carried.Count} piece(s) carried")})");
+
+            // The buffer and its shape are pinned here, while the flag is
+            // held: a resize between now and the read landing would otherwise
+            // hand the reader a freshly allocated frame mid-pass.
             release = false; // RecognizeAsync owns the flag now
-            _ = RecognizeAsync();
+            _ = RecognizeAsync(_reader.ReadsKeyed ? _keyed : _raw, _frameWidth, _frameHeight, window);
         }
         finally
         {
@@ -289,60 +308,36 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private unsafe void FillInput(byte[] source, ref SoftwareBitmap? target)
-    {
-        var size = new Size(_frameWidth, _frameHeight);
-        if (target is null || target.PixelWidth != size.Width * _scale || target.PixelHeight != size.Height * _scale)
-        {
-            target?.Dispose();
-            target = new SoftwareBitmap(BitmapPixelFormat.Bgra8, size.Width * _scale, size.Height * _scale, BitmapAlphaMode.Ignore);
-        }
-
-        using var buffer = target.LockBuffer(BitmapBufferAccessMode.Write);
-        using var reference = buffer.CreateReference();
-        reference.As<CaptureInterop.IMemoryBufferByteAccess>().GetBuffer(out var dst, out _);
-        var desc = buffer.GetPlaneDescription(0);
-
-        fixed (byte* src = source)
-        {
-            var srcStride = size.Width * 4;
-            for (var y = 0; y < size.Height * _scale; y++)
-            {
-                var srcRow = (uint*)(src + y / _scale * srcStride);
-                var dstRow = (uint*)(dst + desc.StartIndex + y * desc.Stride);
-                for (var x = 0; x < size.Width * _scale; x++)
-                    dstRow[x] = srcRow[x / _scale];
-            }
-        }
-    }
-
-    private async Task RecognizeAsync()
+    private async Task RecognizeAsync(byte[] input, int width, int height, FrameDelta.Window window)
     {
         try
         {
-            var result = await _ocr!.RecognizeAsync(_ocrInput);
+            var pieces = await _reader.ReadAsync(input, width, height, window.Top, height);
             _ocrPasses++;
             if (_disposed) return;
 
-            // Fragments go through the row merge first (keying splits a row
-            // at the icon gap), then to the board with their vertical
-            // position in capture pixels — position on the scroll stream is
-            // identity; the text alone cannot be (identical rows repeat).
-            var pieces = new List<OcrRows.Piece>(result.Lines.Count);
-            foreach (var line in result.Lines)
+            // Everything above the read window was read on an earlier pass and
+            // has only moved. Carrying it is the same promise an unchanged
+            // frame makes — the reading still stands — and it is what makes
+            // reading a strip instead of a region legal: the board still sees
+            // every visible row, every pass.
+            if (!window.Whole)
             {
-                var text = line.Text.Trim();
-                if (text.Length == 0 || line.Words.Count == 0) continue;
-                double x = double.MaxValue, top = double.MaxValue, bottom = double.MinValue;
-                foreach (var word in line.Words)
+                foreach (var piece in _carried)
                 {
-                    x = Math.Min(x, word.BoundingRect.X);
-                    top = Math.Min(top, word.BoundingRect.Y);
-                    bottom = Math.Max(bottom, word.BoundingRect.Y + word.BoundingRect.Height);
+                    var y = piece.Y - window.Shift;
+                    if (y + piece.Height <= window.Top && y + piece.Height > 0)
+                        pieces.Add(piece with { Y = y });
                 }
-                pieces.Add(new OcrRows.Piece(x / _scale, top / _scale, (bottom - top) / _scale, text));
             }
+            _carried = pieces;
+
+            // Fragments go through the row merge first (the icon column splits
+            // a row), then to the board with their vertical position in
+            // capture pixels — position on the scroll stream is identity; the
+            // text alone cannot be (identical rows repeat).
             var rows = OcrRows.Merge(pieces);
+            _rowPitch = MeasureRowPitch(rows, _rowPitch);
             TracePass(rows);
             _board.Ingest(rows);
         }
@@ -354,6 +349,24 @@ public sealed class LootWatcher : IDisposable
         {
             Volatile.Write(ref _ocrBusy, 0);
         }
+    }
+
+    /// <summary>
+    /// The gap between adjacent visual rows, which is what the delta's shift
+    /// search is measured in. Same-row fragments sit at the same height and are
+    /// filtered out; a pass with nothing to measure keeps the last answer.
+    /// </summary>
+    private static double MeasureRowPitch(List<LineBoard.OcrLineInput> rows, double fallback)
+    {
+        List<double>? gaps = null;
+        for (var i = 1; i < rows.Count; i++)
+        {
+            var gap = rows[i].Y - rows[i - 1].Y;
+            if (gap >= 8) (gaps ??= []).Add(gap);
+        }
+        if (gaps is null) return fallback;
+        gaps.Sort();
+        return Math.Clamp(gaps[gaps.Count / 2], 8, 64);
     }
 
     private void OnConfirmedPickup(string name, int count, string settledReading)
@@ -378,21 +391,6 @@ public sealed class LootWatcher : IDisposable
         Log($"A frame could not be read: {e.Message}");
     }
 
-    /// <summary>
-    /// English client only for v1: prefer an English recognizer, fall back to
-    /// whatever the profile offers rather than refusing to start.
-    /// </summary>
-    private static OcrEngine? CreateEnglishOcrEngine()
-    {
-        if (OcrEngine.TryCreateFromLanguage(new Language("en-US")) is { } enUs)
-            return enUs;
-        var english = OcrEngine.AvailableRecognizerLanguages
-            .FirstOrDefault(l => l.LanguageTag.StartsWith("en", StringComparison.OrdinalIgnoreCase));
-        if (english is not null && OcrEngine.TryCreateFromLanguage(english) is { } en)
-            return en;
-        return OcrEngine.TryCreateFromUserProfileLanguages();
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
@@ -407,6 +405,6 @@ public sealed class LootWatcher : IDisposable
             _trace = null;
         }
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
-            _ocrInput?.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
+            _reader.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
     }
 }

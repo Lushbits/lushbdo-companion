@@ -53,6 +53,9 @@ public static class LootParser
 
     private const string Verb = "You have obtained";
 
+    /// <summary>How much chat-tag furniture may sit in front of the verb. "System" and a space is six.</summary>
+    private const int MaxTagPrefix = 20;
+
     // The x in `xN` is the least reliable glyph on the line (`x23` / `*23` /
     // `x"` all observed); the digits mostly hold. Accept the misread marks,
     // never a bare number — context decides those (see QuantityTail use).
@@ -85,8 +88,18 @@ public static class LootParser
         var text = Normalize(line);
         if (text.Length == 0) return new Reading(Kind.Unrecognized, "", 0);
 
-        if (text.StartsWith(Verb, StringComparison.OrdinalIgnoreCase))
-            return ParseObtainLine(text[Verb.Length..]);
+        // The chat draws its channel in a rounded box left of the message
+        // ("System"). Keying used to swallow it; a scene-text reader reads it,
+        // sometimes as its own fragment and sometimes run into the verb
+        // ("System You have obtained[Rough Stone]"). It is furniture either
+        // way — the same class of thing as the icon token this parser already
+        // steps over between the verb and the bracket. Bounded, so it can only
+        // ever skip a tag: a short prefix, no brackets in it, and the verb
+        // still has to be there in full.
+        var verbAt = text.IndexOf(Verb, StringComparison.OrdinalIgnoreCase);
+        var tagOnly = verbAt > 0 && verbAt <= MaxTagPrefix && text.AsSpan(0, verbAt).IndexOfAny('[', ']') < 0;
+        if (verbAt == 0 || tagOnly)
+            return ParseObtainLine(text[(verbAt + Verb.Length)..]);
 
         // Not an obtain line. A wrapped tail is only ever *consumed* when the
         // line above is waiting for it — classified here, decided in context,

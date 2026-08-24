@@ -176,4 +176,31 @@ public class LootParserTests
         Assert.Equal("Rough Stone", r.Name);
         Assert.Equal(2, r.Count);
     }
+
+    // The chat's channel box. Keying hid it; PaddleOCR reads it, sometimes run
+    // straight into the verb. It is furniture, and stepping over it may never
+    // become a way for another channel's text to be read as loot.
+
+    [Theory]
+    [InlineData("System You have obtained [Rough Stone] x3. (23:45)", "Rough Stone", 3)]
+    [InlineData("System You have obtained[Magnetite Ore] x50. (23:45)", "Magnetite Ore", 50)]
+    [InlineData("Syst.em You have obtained [Blush Leaf]. (01:02)", "Blush Leaf", 1)]
+    public void AChatTagInFrontOfTheVerbIsSteppedOver(string line, string name, int count)
+    {
+        var reading = LootParser.Parse(line);
+        Assert.Equal(LootParser.Kind.Item, reading.Kind);
+        Assert.Equal(name, reading.Name);
+        Assert.Equal(count, reading.Count);
+    }
+
+    [Theory]
+    // Too much in front of it to be a tag — a sentence someone typed.
+    [InlineData("Lushbits: hey did you see what You have obtained [Rough Stone] x3. (23:45)")]
+    // A bracket before the verb is another line's text bleeding in, not a
+    // channel box — the tag is drawn as a rounded box and reads as bare word.
+    [InlineData("[Rough Stone] You have obtained [Blush Leaf]. (01:02)")]
+    public void TextInFrontOfTheVerbThatIsNotATagIsNotLoot(string line)
+    {
+        Assert.Equal(LootParser.Kind.Unrecognized, LootParser.Parse(line).Kind);
+    }
 }

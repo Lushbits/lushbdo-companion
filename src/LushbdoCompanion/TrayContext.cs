@@ -16,6 +16,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
     private readonly ToolStripMenuItem _traceItem;
+    private readonly ToolStripMenuItem _windowsOcrItem;
     private LootWatcher? _watcher;
     private LootSender? _sender;
     private bool _updateBalloonShown;
@@ -35,6 +36,11 @@ public sealed class TrayContext : ApplicationContext
             Checked = _settings.TraceOcr
         };
 
+        _windowsOcrItem = new ToolStripMenuItem("Read with Windows OCR (lighter, less accurate)", null, (_, _) => ToggleReader())
+        {
+            Checked = _settings.UseWindowsOcr
+        };
+
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
         menu.Items.Add("Pick loot log region…", null, async (_, _) => await PickRegionAsync());
@@ -44,6 +50,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
         menu.Items.Add(_traceItem);
+        menu.Items.Add(_windowsOcrItem);
         menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
@@ -199,7 +206,8 @@ public sealed class TrayContext : ApplicationContext
             _log.Append("Not paired — reading the loot log but sending nothing. Paste a device token in Settings to feed your sessions.");
         }
 
-        var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add);
+        IOcrReader reader = _settings.UseWindowsOcr ? new WindowsOcrReader() : new PaddleOcrReader();
+        var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add, reader: reader);
         try
         {
             await watcher.StartAsync();
@@ -239,6 +247,22 @@ public sealed class TrayContext : ApplicationContext
         _traceItem.Checked = _settings.TraceOcr;
         if (_watcher is not null) _watcher.SetTracing(_settings.TraceOcr);
         else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
+    }
+
+    /// <summary>
+    /// Swapping the recognizer changes what a pass costs and what it reads, so
+    /// it takes effect on the next watch rather than mid-session — a reader
+    /// changing under a board that is mid-consensus is a way to lose rows.
+    /// </summary>
+    private void ToggleReader()
+    {
+        _settings.UseWindowsOcr = !_settings.UseWindowsOcr;
+        _settings.Save();
+        _windowsOcrItem.Checked = _settings.UseWindowsOcr;
+        var which = _settings.UseWindowsOcr ? "Windows OCR" : "PaddleOCR";
+        _log.Append(_watcher is null
+            ? $"Reading with {which} from the next watch."
+            : $"Reading with {which} from the next watch — restart watching to switch now.");
     }
 
     private void ShowSettings()
