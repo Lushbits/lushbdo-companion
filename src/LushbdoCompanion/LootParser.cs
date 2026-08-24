@@ -125,6 +125,46 @@ public static class LootParser
         return new Reading(Kind.Unrecognized, "", 0);
     }
 
+    /// <summary>
+    /// What two readings of the same physical row have to agree on for the
+    /// board to call them one line. The text itself cannot be that any more.
+    /// A scene-text recognizer re-detects the row on every frame, so the
+    /// furniture around the message comes and goes: the same row read
+    /// `obtained / [Wolf Blood] x22. (22:17)` on 21 passes and
+    /// `obtained  [Wolf Blood] x22. (22:17)` on 19 of them (field trace,
+    /// 2026-08-24 22:12), the icon landing as a slash or as nothing. Keyed on
+    /// raw text those are two different lines: the scroll vote finds nothing
+    /// to match, three such passes declare the board lost, and realigning
+    /// writes a screenful of real pickups off as already counted.
+    ///
+    /// So the key is the line with exactly its furniture taken out — the
+    /// chat's channel box and the item's icon, the two things this parser
+    /// already steps over — and its whitespace collapsed. Nothing else is
+    /// loosened: the name, the count and the timestamp still have to match
+    /// character for character, so two genuinely different rows can never key
+    /// alike. The timestamp stays what it has always been here, shape rather
+    /// than data — it tells rows apart and is never read as a clock.
+    /// </summary>
+    public static string IdentityKey(string line)
+    {
+        var text = Normalize(line);
+        if (text.Length == 0) return "";
+
+        var verbAt = text.IndexOf(Verb, StringComparison.OrdinalIgnoreCase);
+        var tagOnly = verbAt > 0 && verbAt <= MaxTagPrefix && text.AsSpan(0, verbAt).IndexOfAny('[', ']') < 0;
+        if (verbAt < 0 || (verbAt != 0 && !tagOnly)) return text;
+
+        var rest = text[(verbAt + Verb.Length)..];
+        var open = rest.IndexOf('[');
+        if (open < 0) return Verb + rest;
+
+        // The same "one short token is the icon" rule ParseObtainLine applies,
+        // so there is one idea of furniture and not two.
+        var junk = rest[..open].Trim();
+        if (junk.Length > 0 && (junk.Length > 3 || junk.Contains(' '))) return Verb + rest;
+        return Verb + " " + rest[open..];
+    }
+
     private static Reading ParseObtainLine(string rest)
     {
         var open = rest.IndexOf('[');

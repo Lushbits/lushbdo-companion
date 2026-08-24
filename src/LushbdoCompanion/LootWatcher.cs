@@ -127,6 +127,31 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// The fragments as the reader handed them over, before the row merge
+    /// joins them. Without this, a row that arrives missing its item name is
+    /// unanswerable from the trace — the merged line cannot say whether the
+    /// reader never found the name or whether the merge put it on the wrong
+    /// row, and those are opposite fixes (field trace 2026-08-24 22:14, where
+    /// two rows came back as a bare "System You have obtained" and the log
+    /// could not settle which).
+    /// </summary>
+    private void TracePieces(List<OcrRows.Piece> pieces, int freshCount)
+    {
+        if (_trace is null) return;
+        lock (_traceLock)
+        {
+            if (_trace is null) return;
+            _trace.WriteLine($"{DateTime.Now:HH:mm:ss.f}  piece {pieces.Count} ({freshCount} read, {pieces.Count - freshCount} carried)");
+            for (var i = 0; i < pieces.Count; i++)
+            {
+                var p = pieces[i];
+                _trace.WriteLine($"             {(i < freshCount ? "read  " : "carry ")}" +
+                                 $"x={p.X,6:F1} y={p.Y,6:F1} h={p.Height,5:F1}  \"{p.Text}\"");
+            }
+        }
+    }
+
     private void TracePass(List<LineBoard.OcrLineInput> rows)
     {
         if (_trace is null) return;
@@ -321,6 +346,7 @@ public sealed class LootWatcher : IDisposable
             // frame makes — the reading still stands — and it is what makes
             // reading a strip instead of a region legal: the board still sees
             // every visible row, every pass.
+            var freshCount = pieces.Count;
             if (!window.Whole)
             {
                 foreach (var piece in _carried)
@@ -331,6 +357,7 @@ public sealed class LootWatcher : IDisposable
                 }
             }
             _carried = pieces;
+            TracePieces(pieces, freshCount);
 
             // Fragments go through the row merge first (the icon column splits
             // a row), then to the board with their vertical position in

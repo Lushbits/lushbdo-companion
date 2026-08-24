@@ -21,8 +21,16 @@ public class LineBoardTests
         _board = new LineBoard((n, c, raw) => _emitted.Add((n, c, raw)), _notes.Add);
     }
 
-    private void Pass(params (string Text, double Y)[] lines) =>
-        _board.Ingest(lines.Select(l => new LineBoard.OcrLineInput(l.Text, l.Y, 16)).ToList());
+    private void Pass(params (string Text, double Y)[] lines) => PassBoxed(16, lines);
+
+    /// <summary>
+    /// A pass whose rows carry a stated box height. Recognizers disagree wildly
+    /// about that number for identical rows — the OS one boxes a 24px-pitch
+    /// chat at ~13px, PaddleOCR's detector at ~28 — so anything the board
+    /// measures in row-heights has to be pinned against both.
+    /// </summary>
+    private void PassBoxed(double height, params (string Text, double Y)[] lines) =>
+        _board.Ingest(lines.Select(l => new LineBoard.OcrLineInput(l.Text, l.Y, height)).ToList());
 
     [Fact]
     public void LinesVisibleAtStartAreBaselineAndNeverSend()
@@ -444,5 +452,91 @@ public class LineBoardTests
         Pass((RoughStone, 82), (Weeds, 100));
         Assert.Empty(_emitted);
         Assert.Contains(_notes, n => n.Contains("Baseline"));
+    }
+
+    // The 2026-08-24 field failure, in miniature. PaddleOCR re-detects each
+    // row every frame, so the chat's channel box and the item's icon come and
+    // go between passes. Keyed on raw text that made every pass a different
+    // line: nothing matched, the board declared itself lost, and realigning
+    // wrote a screenful of real pickups off as already counted.
+
+    private const string WithIcon = "System You have obtained / [Wolf Blood] x22. (22:17)";
+    private const string WithoutIcon = "System You have obtained  [Wolf Blood] x22. (22:17)";
+    private const string NoSpace = "System You have obtained[Wolf Blood] x22. (22:17)";
+    private const string NoTag = "You have obtained [Wolf Blood] x22. (22:17)";
+
+    [Fact]
+    public void AFlickeringIconIsTheSameReadingTwiceAndSettles()
+    {
+        Pass((Weeds, 100));
+        Pass((Weeds, 82), (WithIcon, 100));
+        Assert.Empty(_emitted);
+        Pass((Weeds, 82), (WithoutIcon, 100)); // the icon vanished; the row did not
+        Assert.Equal([("Wolf Blood", 22, WithIcon)], _emitted);
+    }
+
+    [Theory]
+    [InlineData(WithoutIcon)]
+    [InlineData(NoSpace)]
+    [InlineData(NoTag)]
+    public void FurnitureChangingUnderTheOnlyAnchorStillVotesTheScroll(string second)
+    {
+        // One line on the board, so it alone can vote the shift — the state a
+        // sparse chat is in constantly. The chat scrolls a row and only the
+        // furniture reads differently. If that costs the vote there is nothing
+        // else to carry it: three blind passes and the board realigns, which
+        // is exactly how a screenful of pickups got written off in the field.
+        Pass((WithIcon, 140));
+        Pass((second, 118), (RoughStone, 140));
+        Pass((second, 118), (RoughStone, 140));
+        Pass((second, 118), (RoughStone, 140));
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
+        Assert.Contains(_emitted, e => e.Name == "Rough Stone");
+    }
+
+    [Fact]
+    public void TwoGenuinelyDifferentRowsNeverKeyAlike()
+    {
+        // The loosening stops at furniture: a different count is a different
+        // line, and must not be able to settle one another's consensus.
+        Pass((Weeds, 100));
+        Pass((Weeds, 82), ("You have obtained [Wolf Blood] x22. (22:17)", 100));
+        Pass((Weeds, 82), ("You have obtained [Wolf Blood] x23. (22:17)", 100));
+        Assert.Empty(_emitted);
+    }
+
+    // Box heights are the one number recognizers disagree about wildly for
+    // identical rows, so anything the board measures in them moves when the
+    // reader changes. These two pin the wrap reach — the tolerance where being
+    // too generous files one line's count against another line's name.
+
+    private const string Head = "You have obtained [Secret Book of the Forgotten Adventurer]";
+    private const string Tail = "x4. (18:51)";
+    private static string Filler(int n) => $"You have obtained [Rough Stone] x{n}. (18:4{n})";
+
+    [Fact]
+    public void ATallBoxedHeadDoesNotAdoptATailTwoRowsBelow()
+    {
+        // 24px pitch, 28px boxes. The row under the head did not read this
+        // pass, so the next tracker down is a full two rows away and its
+        // quantity belongs to somebody else. Reach scaled off box height was
+        // 1.8 x 28 = 50px, which swallows that 48px gap.
+        PassBoxed(28, (Filler(1), 28), (Filler(2), 52), (Filler(3), 76), (Filler(4), 100));
+        PassBoxed(28, (Filler(1), 4), (Filler(2), 28), (Filler(3), 52), (Filler(4), 76), (Head, 100));
+        PassBoxed(28, (Filler(2), 4), (Filler(3), 28), (Filler(4), 52), (Head, 76), (Tail, 124));
+        PassBoxed(28, (Filler(2), 4), (Filler(3), 28), (Filler(4), 52), (Head, 76), (Tail, 124));
+        Assert.DoesNotContain(_emitted, e => e.Name == "Secret Book of the Forgotten Adventurer");
+    }
+
+    [Fact]
+    public void ATallBoxedWrapStillJoinsItsRealTail()
+    {
+        // The same shape, with the tail where a wrap actually puts it.
+        PassBoxed(28, (Filler(1), 28), (Filler(2), 52), (Filler(3), 76), (Filler(4), 100));
+        PassBoxed(28, (Filler(1), 4), (Filler(2), 28), (Filler(3), 52), (Filler(4), 76), (Head, 100));
+        PassBoxed(28, (Filler(2), 4), (Filler(3), 28), (Filler(4), 52), (Head, 76), (Tail, 100));
+        PassBoxed(28, (Filler(2), 4), (Filler(3), 28), (Filler(4), 52), (Head, 76), (Tail, 100));
+        var e = Assert.Single(_emitted, x => x.Name == "Secret Book of the Forgotten Adventurer");
+        Assert.Equal(4, e.Count);
     }
 }
