@@ -13,7 +13,7 @@ public sealed class SettingsForm : Form
     {
         _settings = settings;
 
-        Text = "Lushbdo Companion — settings";
+        Text = "LushBDO Companion — settings";
         // The layout below is laid out in 96-DPI pixels; Dpi auto-scaling is
         // what keeps it usable at 125 %/150 % now that the app is per-monitor
         // DPI aware for the capture side.
