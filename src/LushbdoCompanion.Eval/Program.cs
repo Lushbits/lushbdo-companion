@@ -166,6 +166,13 @@ if (balance)
     // PaddleOCR the raw pixels at 1:1, Windows.Media.Ocr the keyed frame at
     // the 2× enlargement it ships with. Anything else measures a pipeline
     // nothing runs.
+    //
+    // For PaddleOCR that means the *padded* recipe, which is what the app uses
+    // for a tight crop — `--rapid-opts tight` reproduces the unpadded one the
+    // chat region gets, and is how the border's worth was measured (0 of 6
+    // field crops read against 6 of 6). These two silently disagreed once
+    // already: this harness defaulted to padded while the app ran unpadded, so
+    // a green report was scoring a pipeline nothing shipped.
     var shippedKey = new Key(140, 80, 2, Out.Brightness);
     var tally = new Dictionary<string, BalanceScore>();
     foreach (var name in engines) tally[name] = default;

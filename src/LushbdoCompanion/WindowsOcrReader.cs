@@ -38,7 +38,9 @@ public sealed class WindowsOcrReader : IOcrReader
         return Task.CompletedTask;
     }
 
-    public async Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height)
+    // tightCrop is ignored: this engine has no scan-border knob to turn, and
+    // it is never handed a balance crop anyway (see ReadsGroupedDigits).
+    public async Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height, bool tightCrop = false)
     {
         Fill(bgra, width, height);
         var result = await _ocr!.RecognizeAsync(_input);

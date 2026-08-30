@@ -470,7 +470,10 @@ public sealed class LootWatcher : IDisposable
     {
         try
         {
-            var pieces = await _reader.ReadAsync(input, width, height);
+            // tightCrop: the rectangle was drawn around the figure, so the
+            // text runs to its edges and the detector needs its scan border to
+            // find the row at all.
+            var pieces = await _reader.ReadAsync(input, width, height, tightCrop: true);
             if (_disposed) return;
 
             // A crop this small can still come back as several fragments — a

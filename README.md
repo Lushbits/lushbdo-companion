@@ -115,10 +115,14 @@ bottom of its panel, the central market at the top of its own — which is why
 there are two rectangles rather than one. A rectangle picked over the warehouse
 sees only scenery when the market is what is open.
 
-Drag it around the digits and as little else as possible. It does not need to
-be tight — extra background costs nothing, and the label beside the figure has
-no digits in it so it cannot confuse anything — but a neighbouring button or
-counter inside the rectangle can and does spoil the read.
+Drag it around the digits with a little room to spare — the recognizer needs
+some margin around the text to find it at all — but **keep buttons out of the
+rectangle**. A button's hover overlay can cover part of the figure, and then
+the app is reading a number that is genuinely missing its last few digits with
+nothing to mark it as incomplete. That is the one failure the strict shape
+cannot catch, because a truncated grouped number is still a grouped number.
+Two rectangles are the only defence against it, which is a reason to aim both
+rather than one.
 
 Both rectangles are independently optional — pick neither, one, or both. They
 ride the same **Start watching** toggle and the same capture as the loot log,
