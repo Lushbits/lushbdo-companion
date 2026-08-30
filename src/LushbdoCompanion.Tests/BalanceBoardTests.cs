@@ -201,6 +201,53 @@ public class BalanceBoardTests
     }
 
     /// <summary>
+    /// The bug the first field trace caught (2026-08-30 15:45): these panels
+    /// drift between reads, so every read arrived under a "new picture" and
+    /// the vote restarted at one. The real figure was read correctly five
+    /// times and confirmed none of them. Agreement belongs to the reading, not
+    /// to the pixels.
+    /// </summary>
+    [Fact]
+    public void APanelThatDriftsBetweenReadsStillConfirms()
+    {
+        var board = NewBoard();
+        var panel = BalanceBoard.Panel.Warehouse;
+        const string field = "Warehouse Balance 23,975,827,939";
+
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
+        {
+            // Each read sits on its own slightly different picture, with the
+            // world moving in between — exactly the shape of the trace.
+            var drifted = Picture((byte)(60 + i * 30));
+            Assert.False(board.Observe(panel, drifted, Length)); // it moved to get here
+            Read(board, panel, drifted, field);
+        }
+
+        Assert.Equal(23_975_827_939L, board.Confirmed);
+    }
+
+    /// <summary>Drift is not a licence to agree with itself: different readings still never confirm.</summary>
+    [Fact]
+    public void DriftDoesNotLetDisagreeingReadingsConfirm()
+    {
+        var board = NewBoard();
+        var panel = BalanceBoard.Panel.Warehouse;
+
+        for (var i = 0; i < 9; i++)
+        {
+            var drifted = Picture((byte)(20 + i * 20));
+            board.Observe(panel, drifted, Length);
+            if (board.Observe(panel, drifted, Length))
+            {
+                board.TakeRead(panel);
+                board.Ingest(panel, i % 2 == 0 ? "1,234,567" : "7,654,321");
+            }
+        }
+
+        Assert.Null(board.Confirmed);
+    }
+
+    /// <summary>
     /// The frames stopped: the confirmed figure is the log's memory and stands,
     /// but nothing that was half-agreed carries across the gap.
     /// </summary>

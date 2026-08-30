@@ -20,10 +20,15 @@ namespace LushbdoCompanion;
 /// against a dropped digit that exists, and it is why the shape is not simply
 /// `[\d,.]+`.
 ///
-/// For the same reason an ungrouped run is accepted only up to three digits —
-/// a value below the first grouping boundary, where the game would render no
-/// separator anyway. A longer bare run means the separators were lost in the
-/// read, and a read that loses separators may have lost digits too.
+/// For the same reason a run with **no separator at all is refused outright**.
+/// That started as "accept up to three digits, where the game would render no
+/// separator anyway" and the first field trace killed it inside a minute
+/// (2026-08-30 15:46): a rectangle catching neighbouring UI read `0 Black` and
+/// `9 EXP`, the bare runs passed, three of them agreed, and the log confirmed
+/// **0 silver** and then **9 silver** as balances. A bare digit is not a
+/// balance — it is any number the interface happens to draw nearby. Requiring
+/// the grouping costs a balance under a thousand, which in this game does not
+/// exist, and buys refusal of every stray digit in the frame.
 ///
 /// **Which separator the game actually renders is a field fact nobody here
 /// has** (#22 says so, and says not to guess it). So both of the plausible
@@ -113,9 +118,10 @@ public static class BalanceParser
     }
 
     /// <summary>
-    /// One number, grouped in threes by a single separator, or an ungrouped
-    /// run of at most three digits. Every other arrangement of the same
-    /// characters is a read this app will not stand behind.
+    /// One number, grouped in threes by a single separator. Every other
+    /// arrangement of the same characters — a short group, a mixed separator,
+    /// a bare run with no grouping at all — is a read this app will not stand
+    /// behind.
     /// </summary>
     private static bool TryWholeGrouped(string run, out long value)
     {
@@ -135,6 +141,9 @@ public static class BalanceParser
             start = i + 1;
         }
 
+        // No separator means no grouping, and an ungrouped digit run is any
+        // number the interface drew near the rectangle — see the summary.
+        if (groups.Count < 2) return false;
         if (groups[0].Length is < 1 or > 3) return false;
         for (var g = 1; g < groups.Count; g++)
             if (groups[g].Length != 3) return false;

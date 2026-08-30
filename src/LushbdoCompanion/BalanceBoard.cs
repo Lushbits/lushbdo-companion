@@ -45,12 +45,19 @@ namespace LushbdoCompanion;
 /// read as a hundred) is a factor of ten rather than one pickup — and two
 /// panels that disagree confirm nothing at all.
 ///
-/// Honest about what that agreement is worth: consecutive captures of a static
-/// panel are near-identical by construction, so agreeing passes catch
-/// frame-to-frame instability and *not* a misread the recognizer makes the
+/// What that agreement is worth was the open question, and the first field
+/// trace answered it better than expected: these panels are *not* frozen. They
+/// drift between reads, so the agreeing passes are genuinely independent
+/// captures rather than the same arithmetic over the same buffer. The vote is
+/// therefore kept on the reading and not on the picture — the opposite of what
+/// this class shipped with, which is why the real figure was read correctly
+/// five times and confirmed none of them.
+///
+/// What agreement still cannot catch is a misread the recognizer makes the
 /// same way every time. The grouping-strict shape in
-/// <see cref="BalanceParser"/> is what stands against that one, and a traced
-/// field session is what settles whether either bar is high enough.
+/// <see cref="BalanceParser"/> is the whole guard against that one, and the
+/// same trace showed how much work it does: with a bare digit run allowed, a
+/// rectangle overlapping neighbouring UI confirmed `0 Black` as 0 silver.
 /// </summary>
 public sealed class BalanceBoard
 {
@@ -114,7 +121,7 @@ public sealed class BalanceBoard
             p.LastRead = [];
             pixels.AsSpan(0, length).CopyTo(p.Previous);
             p.StillNow = false;
-            p.NewPicture();
+            p.Forget();
             return false;
         }
 
@@ -133,8 +140,15 @@ public sealed class BalanceBoard
         }
         if (!still) return false;
 
-        // A new picture is a new question: whatever was half-agreed about the
-        // old one says nothing about this one.
+        // A picture that moved on gets a fresh read budget — but *not* a fresh
+        // vote. Those were the same thing until the first field trace
+        // (2026-08-30 15:45), where the real figure was read correctly five
+        // times and confirmed none of them: these panels drift between reads,
+        // every drift counted as a new question, and the count restarted at
+        // one forever. Agreement belongs to the reading, not to the pixels —
+        // and readings taken across a drift agree *more* meaningfully than
+        // ones taken off a frozen buffer, which is the whole worry recorded in
+        // this class's summary.
         if (changedSinceRead) p.NewPicture();
         return !p.Done && p.ReadsThisPicture < ReadsPerPicture;
     }
@@ -239,7 +253,7 @@ public sealed class BalanceBoard
             p.LastRead = [];
             p.StillNow = false;
             p.TracedStill = false;
-            p.NewPicture();
+            p.Forget();
         }
     }
 
@@ -287,15 +301,27 @@ public sealed class BalanceBoard
 
         public string LastNote = "";
 
+        /// <summary>
+        /// The picture moved on: a fresh budget of passes, and nothing said
+        /// about the old one. The vote deliberately survives — see the note at
+        /// the call site. <see cref="LastValue"/> does not, because the
+        /// cross-panel check asks what the other panel is showing *now*.
+        /// </summary>
         public void NewPicture()
         {
             Done = false;
             ReadsThisPicture = 0;
             ValidReads = 0;
-            PendingValue = null;
-            PendingCount = 0;
             LastValue = null;
             LastNote = "";
+        }
+
+        /// <summary>A discontinuity — the frames stopped, the region moved. Nothing carries across one.</summary>
+        public void Forget()
+        {
+            NewPicture();
+            PendingValue = null;
+            PendingCount = 0;
         }
     }
 }
