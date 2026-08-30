@@ -12,6 +12,7 @@ public sealed class LogWindow : Form
     public LogWindow()
     {
         Text = "Lushbdo Companion — log";
+        if (AppIcon.Window() is { } icon) Icon = icon;
         // Sized in 96-DPI pixels; Dpi auto-scaling keeps the window sensible
         // at 125 %/150 % now that the app is per-monitor DPI aware.
         AutoScaleMode = AutoScaleMode.Dpi;
