@@ -140,14 +140,22 @@ set to, or `not picked yet`. Clicking one picks it again, and each has its own
 **Forget**. Forgetting the loot log is allowed too — watching then stops until
 you pick one again, because the single capture is aimed at it.
 
-**Nothing is sent.** This step reads the figure and writes it to the log;
-feeding it to the site is separate work. Three things the log tells apart:
+**A confirmed figure is sent to the site**, where it becomes your liquid silver
+on the sheet, the goal bar, the dashboard and the `/assets` series — the same
+number a press writes, so nothing about it is a separate kind of entry. It goes
+only when it *differs* from the figure the site already has, and never more than
+once every couple of minutes; a balance is account state, so no gather session
+needs to be running. Unpaired, the app reads and logs exactly as below and sends
+nothing.
+
+Three things the log tells apart:
 
 - nothing at all — no panel is open over the rectangle, so nothing was read
 - read but not confirmed, with the reason — a shape the app will not stand
   behind, or readings that never agreed
 - confirmed at a value, and every couple of minutes after that, that it is
-  still reading the same one
+  still reading the same one — then `sent` when the site takes it, or `sent …
+  the site already had it` when the figure had not moved
 
 A figure the app is not sure of is never confirmed, and it is strict on
 purpose: a balance has no register behind it the way a loot line does, so

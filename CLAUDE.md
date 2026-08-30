@@ -100,8 +100,17 @@ run without Windows (parser, keyer, board) is link-compiled into
 it.
 
 #22 gave the eyes a second thing to read: the silver balance, from its own
-optional rectangle(s), **written to the log and sent nowhere** — sending is
-#24, itself blocked on the site endpoint (`Lushbits/bdo#664`). Owner ruling:
+optional rectangle; #24 sends the confirmed figure to `POST /silver/record`
+(`Lushbits/bdo#668`), on the same credential the loot route takes, so an
+already-paired member posts balances without minting anything. `SilverSender`
+is deliberately not a second `LootSender`: a balance is a **level**, so it
+holds one figure and replaces it rather than queueing, posts only on a change,
+needs no gather session and no idempotency key, and says nothing on Dispose
+about an undelivered figure — a stale level is not lost data. The route rules
+that a device which cannot establish it reads the *whole* balance must not
+post; the owner answered that in the field on 2026-08-30 (the market panel's
+figure is the whole liquid silver), and if that ever changes the fix is here
+rather than in the route. Owner ruling:
 the warehouse figure and the marketplace figure are one number shown in two
 places, never two to add. So regions are plural (`Settings.RegionKind`, the
 loot log's four flat keys kept exactly where they were so an existing install

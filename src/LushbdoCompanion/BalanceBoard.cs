@@ -119,6 +119,7 @@ public sealed class BalanceBoard
 
     private readonly Action<string> _note;
     private readonly Action<string>? _trace;
+    private readonly Action<long>? _onConfirmed;
 
     private byte[] _previous = [];       // last tick's pixels — the stillness comparison
     private byte[] _lastRead = [];       // the picture the last committed pass read
@@ -131,10 +132,11 @@ public sealed class BalanceBoard
     private string _lastNote = "";
     private int _ticksSinceNote = RepeatNoteTicks;
 
-    public BalanceBoard(Action<string> note, Action<string>? trace = null)
+    public BalanceBoard(Action<string> note, Action<string>? trace = null, Action<long>? onConfirmed = null)
     {
         _note = note;
         _trace = trace;
+        _onConfirmed = onConfirmed;
     }
 
     /// <summary>The newest figure this session stands behind, or null while nothing has confirmed.</summary>
@@ -252,6 +254,12 @@ public sealed class BalanceBoard
         Confirmations++;
         var sameFigure = Confirmed == value;
         Confirmed = value;
+
+        // Every settle, repeats included. What the site does about a figure it
+        // already has is the sender's business and the route's, not this
+        // board's — and reporting the same fact the same way each time is what
+        // lets the sender be the only thing that tracks what was delivered.
+        _onConfirmed?.Invoke(value);
 
         if (sameFigure && _ticksSinceNote < RepeatNoteTicks)
         {
