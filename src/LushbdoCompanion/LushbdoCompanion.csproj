@@ -16,7 +16,7 @@
          share one physical-pixel space; the crop copies pixels by pointer. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.6.0</Version>
+    <Version>0.6.1</Version>
     <!-- The site's own L mark. This is the icon the shell shows for the file
          itself — Explorer, the taskbar, the SmartScreen dialog — and it can
          only come from a file on disk, so it is separate from the embedded

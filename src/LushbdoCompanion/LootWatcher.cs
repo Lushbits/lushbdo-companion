@@ -42,6 +42,20 @@ namespace LushbdoCompanion;
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
+    /// <summary>
+    /// The balance rectangle and where its confirmed figures go — one
+    /// parameter rather than two, and that is the whole point of it.
+    ///
+    /// 0.6.0 shipped with the region wired and the callback not: an edit that
+    /// silently failed to match left `onBalance` at its default null, so the
+    /// sender was built, subscribed to nothing, and read as a working feature
+    /// that sent nothing at all. Two optional parameters made that possible.
+    /// One required pair cannot: asking for the rectangle now means saying
+    /// where its readings go, and a caller that wants only the log says so out
+    /// loud with a no-op.
+    /// </summary>
+    public readonly record struct BalanceWatch(Rectangle Region, Action<long> OnConfirmed);
+
     /// <summary>~2 fps: at 5–10 rows/s a row crosses a screenful in seconds; every frame is a reading chance.</summary>
     private static readonly TimeSpan FramePace = TimeSpan.FromMilliseconds(500);
 
@@ -67,7 +81,7 @@ public sealed class LootWatcher : IDisposable
     // The balance rectangle, as asked for and then as actually watched. It is
     // dropped rather than watched when the recognizer cannot hold grouped
     // digits — see IOcrReader.ReadsGroupedDigits.
-    private readonly Rectangle? _balanceRequested;
+    private readonly BalanceWatch? _balanceRequested;
     private bool _watchingBalance;
     private byte[] _balanceInput = [];   // the OCR input buffer for it
     private TextKeyer? _balanceKeyer;    // only if the reader asked for keyed pixels
@@ -98,8 +112,7 @@ public sealed class LootWatcher : IDisposable
     private volatile bool _disposed;
 
     public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null,
-        IFrameSource? source = null, IOcrReader? reader = null, Rectangle? balanceRegion = null,
-        Action<long>? onBalance = null)
+        IFrameSource? source = null, IOcrReader? reader = null, BalanceWatch? balance = null)
     {
         _region = region;
         _log = log;
@@ -107,8 +120,8 @@ public sealed class LootWatcher : IDisposable
         _source = source ?? new WgcFrameSource();
         _reader = reader ?? new PaddleOcrReader();
         _board = new LineBoard(OnConfirmedPickup, OnBoardNote, Trace);
-        _balance = new BalanceBoard(OnBoardNote, Trace, onBalance);
-        _balanceRequested = balanceRegion;
+        _balance = new BalanceBoard(OnBoardNote, Trace, balance?.OnConfirmed);
+        _balanceRequested = balance;
     }
 
     /// <summary>
@@ -252,7 +265,7 @@ public sealed class LootWatcher : IDisposable
         _source.Failed += OnFailed;
         _source.Status += Log;
         // Slot 0 is the loot log; the balance rectangle is slot 1 when watched.
-        await _source.StartAsync(balance is { } rect ? [_region, rect] : [_region], FramePace);
+        await _source.StartAsync(balance is { } watch ? [_region, watch.Region] : [_region], FramePace);
     }
 
     private void OnTick(FrameSet? tick)
@@ -310,7 +323,7 @@ public sealed class LootWatcher : IDisposable
                 " — text keyed per frame, and read only when it changes.");
             if (_watchingBalance)
                 Log("Also watching one rectangle for your silver balance, off the same capture — read only while " +
-                    "the market panel is open and standing still, and never sent anywhere.");
+                    "the market panel is open and standing still.");
             _sinceLastLogged.Restart();
         }
 
