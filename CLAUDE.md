@@ -73,12 +73,21 @@ undoes the copy RapidOcrNet's own targets make.
 One asterisk on "no runtime prereqs", and it is stated rather than papered
 over: `onnxruntime.dll` imports `MSVCP140`/`VCRUNTIME140`, so it needs the
 Visual C++ 2015-2022 redistributable. Black Desert installs it, so any machine
-that can run the game this app watches already has it — but a machine without
-it falls back to `WindowsOcrReader` with the reason in the log rather than
-failing to watch. `libSkiaSharp.dll` carries its own CRT and needs nothing.
-Nothing else here may grow a native dependency without that same check
-(`dumpbin /dependents`, or the PE import table): a prereq that fails on a
-member's PC is worse than a recognizer that reads a little worse.
+that can run the game this app watches already has it; a machine without it is
+told to install it, in one sentence naming the fix.
+
+That used to be softer — it fell back to `WindowsOcrReader` rather than failing
+— and the softness was the problem. That fallback read 550 of 1020 field rows
+against PaddleOCR's 963 and **0 of 1,332 comma-grouped numbers**, so it halved
+the loot and turned silver off entirely, silently, while the tray offered it as
+a preference ("lighter, less accurate"). A recognizer that cannot do half the
+job is not a fallback, and the honest trade is now the other way round: name
+the prereq, rather than degrade under a member who has no way to tell. So the
+old line here — "a prereq that fails on a member's PC is worse than a
+recognizer that reads a little worse" — was retired on 2026-08-30 with its
+reasoning, and the check it demanded stays: nothing may grow a native
+dependency without `dumpbin /dependents` or the PE import table.
+`libSkiaSharp.dll` carries its own CRT and needs nothing.
 
 ## Versioning
 

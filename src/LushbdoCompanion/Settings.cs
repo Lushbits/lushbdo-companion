@@ -33,14 +33,6 @@ public sealed class Settings
     public bool SilverOnly { get; set; }
 
     /// <summary>
-    /// Read with the OS recognizer instead of PaddleOCR. PaddleOCR reads
-    /// nearly twice as many field rows (#18) and is the default; this is the
-    /// way back for a machine where it costs too much CPU, and the fallback if
-    /// its models ever fail to unpack.
-    /// </summary>
-    public bool UseWindowsOcr { get; set; }
-
-    /// <summary>
     /// The rectangles the app watches, by name. All of them are in physical
     /// pixels relative to the game window's visible top-left — the surface
     /// window capture serves — because window-relative coordinates survive the

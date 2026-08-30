@@ -179,11 +179,6 @@ one number in the crop, requires it grouped in threes, requires three readings
 to agree, and refuses everything else — including a crop with two numbers in
 it. When it refuses, the figure you already have stands.
 
-**Windows OCR does not read balances.** It reads comma-grouped numbers as
-letters (0 of 1,332 read correctly in the app's own bake-off), so with *Read
-with Windows OCR* ticked the silver rectangle is skipped and the log says so,
-rather than spending passes to confirm nothing.
-
 On Windows 11 the app asks the OS to skip the yellow "this window is being
 captured" border and usually may. On Windows 10 that API does not exist: the
 border around the game window is unavoidable there, same as with OBS.
@@ -212,6 +207,15 @@ border around the game window is unavoidable there, same as with OBS.
   practically nothing, so the GC stays quiet.
 - The process runs at below-normal priority: when the game wants the CPU,
   the game wins.
+
+### One prerequisite, and it is almost certainly already there
+
+The recogniser runs on ONNX Runtime, which links the **Microsoft Visual C++
+2015-2022 Redistributable (x64)**. Black Desert installs it, so a machine that
+can run the game this app watches has it. If it is somehow missing, the app
+says so in one sentence and names the fix rather than starting up degraded —
+there used to be a fallback to the OS recogniser, and it was removed because it
+read barely half the loot rows and could not read a silver balance at all.
 
 ### Windows SmartScreen
 

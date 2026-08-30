@@ -45,7 +45,7 @@ public static class OcrModels
             var name = "LushbdoCompanion.models." + file;
             using var source = assembly.GetManifestResourceStream(name)
                 ?? throw new InvalidOperationException(
-                    $"the OCR model {file} is missing from this build — rebuild, or switch the reader to Windows OCR.");
+                    $"the OCR model {file} is missing from this build — rebuild from source.");
             var path = Path.Combine(Directory, file);
             if (File.Exists(path) && new FileInfo(path).Length == source.Length) continue;
             using var target = File.Create(path);

@@ -78,14 +78,10 @@ public sealed class LootWatcher : IDisposable
     private readonly BalanceBoard _balance;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
 
-    // The balance rectangle, as asked for and then as actually watched. It is
-    // dropped rather than watched when the recognizer cannot hold grouped
-    // digits — see IOcrReader.ReadsGroupedDigits.
     private readonly BalanceWatch? _balanceRequested;
     private int _lootSlot = -1;      // which crop is the chat, or -1 when it is not watched
     private int _balanceSlot = -1;   // which crop is the balance, or -1
     private byte[] _balanceInput = [];   // the OCR input buffer for it
-    private TextKeyer? _balanceKeyer;    // only if the reader asked for keyed pixels
 
     private int _frameWidth;
     private int _frameHeight;
@@ -245,18 +241,7 @@ public sealed class LootWatcher : IDisposable
 
     public async Task StartAsync()
     {
-        // The balance rectangle rides the same capture, but only if this
-        // recognizer can hold a grouped number at all. On one that cannot,
-        // every strict-shape check would refuse and the passes would buy
-        // nothing — so say so once instead of spending them.
         var balance = _balanceRequested;
-        if (balance is not null && !_reader.ReadsGroupedDigits)
-        {
-            Log($"The silver balance region is not read by {_reader.Name} — it reads comma-grouped numbers as " +
-                "letters (0 of 1,332 read correctly in the #18 bake-off), so nothing would ever confirm. Switch " +
-                "off \"Read with Windows OCR\" to have your silver read.");
-            balance = null;
-        }
         if (_region is null && balance is null)
             throw new InvalidOperationException("there is nothing to watch — no region is picked.");
 
@@ -264,7 +249,6 @@ public sealed class LootWatcher : IDisposable
         // OS recognizer that is a bounds check, and it wants a real one.
         var sizing = _region ?? balance!.Value.Region;
         await _reader.StartAsync(sizing.Width, sizing.Height);
-        if (balance is not null && _reader.ReadsKeyed) _balanceKeyer = new TextKeyer();
 
         // The slots are worked out rather than assumed, because the loot log is
         // no longer always present: in silver-only the balance rectangle is the
@@ -430,7 +414,7 @@ public sealed class LootWatcher : IDisposable
             // held: a resize between now and the read landing would otherwise
             // hand the reader a freshly allocated frame mid-pass.
             release = false; // RecognizeAsync owns the flag now
-            _ = RecognizeAsync(_reader.ReadsKeyed ? _keyed : _raw, _frameWidth, _frameHeight);
+            _ = RecognizeAsync(_raw, _frameWidth, _frameHeight);
         }
         finally
         {
@@ -489,14 +473,11 @@ public sealed class LootWatcher : IDisposable
         {
             _balance.TakeRead();
 
-            // Through the same seam as the loot path: the reader states which
-            // buffer it wants and is handed that one. The source reuses its
-            // pixel buffer between ticks, so the copy is taken before the read
-            // goes asynchronous.
+            // The source reuses its pixel buffer between ticks, so the copy is
+            // taken before the read goes asynchronous.
             if (_balanceInput.Length != length) _balanceInput = new byte[length];
             var input = _balanceInput;
-            if (_balanceKeyer is { } keyer) keyer.Key(crop.Pixels, crop.Width, crop.Height, input);
-            else crop.Pixels.AsSpan(0, length).CopyTo(input);
+            crop.Pixels.AsSpan(0, length).CopyTo(input);
 
             MaybeDumpBalance(input, crop.Width, crop.Height);
             release = false; // RecognizeBalanceAsync owns the flag now
@@ -548,8 +529,7 @@ public sealed class LootWatcher : IDisposable
         if (_trace is null || _balanceDumps >= BalanceDumpCap) return;
         try
         {
-            var buffer = _reader.ReadsKeyed ? "keyed" : "raw";
-            SavePng(input, width, height, $"bal{_balanceDumps:D3}-{buffer}");
+            SavePng(input, width, height, $"bal{_balanceDumps:D3}-raw");
             _balanceDumps++;
         }
         catch

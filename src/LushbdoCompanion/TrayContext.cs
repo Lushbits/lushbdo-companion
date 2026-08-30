@@ -17,7 +17,6 @@ public sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
     private readonly ToolStripMenuItem _traceItem;
-    private readonly ToolStripMenuItem _windowsOcrItem;
     private readonly ToolStripMenuItem _silverOnlyItem;
 
     // All three rectangles live in one submenu and each says what it is set
@@ -44,11 +43,6 @@ public sealed class TrayContext : ApplicationContext
         _traceItem = new ToolStripMenuItem("Trace OCR to file", null, (_, _) => ToggleTrace())
         {
             Checked = _settings.TraceOcr
-        };
-
-        _windowsOcrItem = new ToolStripMenuItem("Read with Windows OCR (lighter, less accurate)", null, (_, _) => ToggleReader())
-        {
-            Checked = _settings.UseWindowsOcr
         };
 
         // One place for both rectangles, each showing what it is set to. The
@@ -94,7 +88,6 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
         menu.Items.Add(_traceItem);
-        menu.Items.Add(_windowsOcrItem);
         menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
@@ -457,45 +450,34 @@ public sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// Start on the preferred reader, and fall back to the OS one if it cannot
-    /// run at all. PaddleOCR's ONNX Runtime links the *shared* Visual C++
-    /// runtime — the redistributable Black Desert itself installs, so it is
-    /// there on any machine that can run the game this app watches. "In
-    /// practice" is not a thing to fail a member's session over, though, so a
-    /// machine without it reads a little worse instead of not reading.
+    /// One recognizer. There used to be a fallback to the OS one, and it was
+    /// removed because it could not do the job: half the loot rows, and no
+    /// silver at all. A machine that cannot run PaddleOCR now gets one sentence
+    /// naming the fix instead of an app that quietly reads worse.
     /// </summary>
     private async Task<LootWatcher?> StartWatcherAsync(Rectangle? region, LootSender? sender, SilverSender? silver)
     {
-        var order = _settings.UseWindowsOcr ? new[] { "windows" } : new[] { "paddle", "windows" };
-        foreach (var which in order)
+        var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add,
+            reader: new PaddleOcrReader(),
+            balance: _settings.BalanceRegion is { } balanceRect
+                // Unpaired reads and logs and sends nothing; that is said here
+                // rather than left as a null nobody notices.
+                ? new LootWatcher.BalanceWatch(balanceRect, silver is null ? _ => { } : silver.Record)
+                : null);
+        try
         {
-            IOcrReader reader = which == "windows" ? new WindowsOcrReader() : new PaddleOcrReader();
-            var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add, reader: reader,
-                balance: _settings.BalanceRegion is { } balanceRect
-                    // Unpaired reads and logs and sends nothing; that is said
-                    // here rather than left as a null nobody notices.
-                    ? new LootWatcher.BalanceWatch(balanceRect, silver is null ? _ => { } : silver.Record)
-                    : null);
-            try
-            {
-                await watcher.StartAsync();
-                return watcher;
-            }
-            catch (Exception e)
-            {
-                watcher.Dispose();
-                if (which != "paddle")
-                {
-                    _log.Append($"Could not start watching: {e.Message}");
-                    ShowLog();
-                    return null;
-                }
-                _log.Append($"PaddleOCR could not start ({e.Message}) — reading with Windows OCR instead, which finds " +
-                            "fewer rows. Installing the Microsoft Visual C++ 2015-2022 Redistributable (x64) is the " +
-                            "usual fix; most machines already have it.");
-            }
+            await watcher.StartAsync();
+            return watcher;
         }
-        return null;
+        catch (Exception e)
+        {
+            watcher.Dispose();
+            _log.Append($"Could not start watching: {e.Message}");
+            _log.Append("If that mentions a missing DLL, install the Microsoft Visual C++ 2015-2022 " +
+                        "Redistributable (x64) — Black Desert normally installs it, so this is rare.");
+            ShowLog();
+            return null;
+        }
     }
 
     private void StopWatching(string message)
@@ -547,22 +529,6 @@ public sealed class TrayContext : ApplicationContext
         _traceItem.Checked = _settings.TraceOcr;
         if (_watcher is not null) _watcher.SetTracing(_settings.TraceOcr);
         else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
-    }
-
-    /// <summary>
-    /// Swapping the recognizer changes what a pass costs and what it reads, so
-    /// it takes effect on the next watch rather than mid-session — a reader
-    /// changing under a board that is mid-consensus is a way to lose rows.
-    /// </summary>
-    private void ToggleReader()
-    {
-        _settings.UseWindowsOcr = !_settings.UseWindowsOcr;
-        _settings.Save();
-        _windowsOcrItem.Checked = _settings.UseWindowsOcr;
-        var which = _settings.UseWindowsOcr ? "Windows OCR" : "PaddleOCR";
-        _log.Append(_watcher is null
-            ? $"Reading with {which} from the next watch."
-            : $"Reading with {which} from the next watch — restart watching to switch now.");
     }
 
     private void ShowSettings()
