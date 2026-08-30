@@ -34,6 +34,40 @@ public class BalanceBoardTests
         board.Ingest(text);
     }
 
+    /// <summary>
+    /// The board hands every settled figure onward, repeats included — that is
+    /// the edge the sender hangs off, and 0.6.0 shipped with the other end of
+    /// it unwired. This covers the half that can be tested; the half in
+    /// TrayContext is now structural, since asking for a balance rectangle
+    /// means passing a `BalanceWatch` and that cannot carry a region without a
+    /// callback.
+    /// </summary>
+    [Fact]
+    public void EveryConfirmedFigureIsHandedOnward()
+    {
+        var seen = new List<long>();
+        var board = new BalanceBoard(_notes.Add, null, seen.Add);
+        var picture = Picture(50);
+        board.Observe(picture, Length);
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
+        {
+            Assert.True(board.Observe(picture, Length));
+            board.TakeRead();
+            board.Ingest("Warehouse Balance 25,482,353,064");
+        }
+
+        Assert.Equal([25_482_353_064L], seen);
+
+        // A repeat is handed on too: the sender decides what to do about a
+        // figure the site already has, and it is the only thing tracking that.
+        var drifted = Picture(120);
+        board.Observe(drifted, Length);
+        Assert.True(board.Observe(drifted, Length));
+        board.TakeRead();
+        board.Ingest("Warehouse Balance 25,482,353,064");
+        Assert.Equal(2, seen.Count);
+    }
+
     [Fact]
     public void TheFirstFrameIsOnlyABaseline()
     {

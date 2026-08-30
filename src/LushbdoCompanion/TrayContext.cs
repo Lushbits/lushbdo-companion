@@ -165,7 +165,7 @@ public sealed class TrayContext : ApplicationContext
             _log.Append($"Region · {RegionName(kind)}: {r.Width}×{r.Height} at ({r.X}, {r.Y}) in the game window." +
                         (kind == Settings.RegionKind.Loot
                             ? " Right-click the tray icon → Start watching."
-                            : " Read for your silver balance while that panel is open, and never sent."));
+                            : " Read for your silver balance while that panel is open."));
         }
     }
 
@@ -439,7 +439,11 @@ public sealed class TrayContext : ApplicationContext
         {
             IOcrReader reader = which == "windows" ? new WindowsOcrReader() : new PaddleOcrReader();
             var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add, reader: reader,
-                    balanceRegion: _settings.BalanceRegion);
+                balance: _settings.BalanceRegion is { } balanceRect
+                    // Unpaired reads and logs and sends nothing; that is said
+                    // here rather than left as a null nobody notices.
+                    ? new LootWatcher.BalanceWatch(balanceRect, silver is null ? _ => { } : silver.Record)
+                    : null);
             try
             {
                 await watcher.StartAsync();

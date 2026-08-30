@@ -273,8 +273,7 @@ public sealed class BalanceBoard
         // session and a member cannot tell a working rectangle from a dead one.
         _note(sameFigure
             ? $"balance  still reading {BalanceParser.Money(value)} silver — unchanged."
-            : $"balance  confirmed {BalanceParser.Money(value)} silver ({AgreeingReads} agreeing readings). " +
-              "Nothing is sent — this is the log only.");
+            : $"balance  confirmed {BalanceParser.Money(value)} silver ({AgreeingReads} agreeing readings).");
     }
 
     /// <summary>
