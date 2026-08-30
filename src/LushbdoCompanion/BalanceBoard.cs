@@ -105,6 +105,24 @@ public sealed class BalanceBoard
     /// </summary>
     public const int CrossCheckTicks = 20;
 
+    /// <summary>
+    /// How long the log may repeat itself about one rectangle — about two
+    /// minutes at the watcher's pace, the same cadence as the watcher's own
+    /// heartbeat.
+    ///
+    /// Both directions of this were wrong before. A repeat confirmation was
+    /// suppressed entirely as "same value, nothing to say", so a rectangle
+    /// that was reading and re-confirming perfectly went silent and read as
+    /// broken — twice, to the person who built it (2026-08-30 16:15). And a
+    /// refusal was deduplicated per *picture*, which these drifting panels
+    /// manufacture constantly, so the same "there were no digits in it" line
+    /// arrived every few seconds.
+    ///
+    /// Proof of life beats both. The log says the same thing at most this
+    /// often, and says it rather than leaving silence to be interpreted.
+    /// </summary>
+    public const int RepeatNoteTicks = 240;
+
     private readonly Action<string> _note;
     private readonly Action<string>? _trace;
     private readonly PanelState[] _panels = [new(Panel.Warehouse), new(Panel.Marketplace)];
@@ -144,6 +162,7 @@ public sealed class BalanceBoard
             p.LastValue = null;
             p.LastValueAge = 0;
         }
+        if (p.TicksSinceNote < int.MaxValue) p.TicksSinceNote++;
 
         if (p.Previous.Length != length)
         {
@@ -273,19 +292,24 @@ public sealed class BalanceBoard
         Confirmed = value;
         _confirmedBy = p.Panel;
 
-        if (sameFigure && !otherPanel)
+        if (sameFigure && !otherPanel && p.TicksSinceNote < RepeatNoteTicks)
         {
             _trace?.Invoke($"bal   {p.Panel} confirmed {value} again — unchanged");
             return;
         }
-        // The second rectangle agreeing is the cross-check *passing*, and a
-        // member who has just aimed one deserves to see it work. Silence is
-        // what a re-read of the same picture earns, not a second view of it.
-        _note(sameFigure
-            ? $"balance  the {Name(p.Panel)} rectangle confirms the same {BalanceParser.Money(value)} silver — " +
-              "both views agree."
-            : $"balance  confirmed {BalanceParser.Money(value)} silver from the {Name(p.Panel)} " +
-              $"({AgreeingReads} agreeing readings). Nothing is sent — this is the log only.");
+        p.TicksSinceNote = 0;
+
+        // Three things worth telling apart: a figure that changed, the *other*
+        // rectangle agreeing with it (the cross-check passing, which is the
+        // most reassuring line this feature can print), and a periodic "still
+        // reading it" so silence never has to be interpreted.
+        _note(!sameFigure
+            ? $"balance  confirmed {BalanceParser.Money(value)} silver from the {Name(p.Panel)} " +
+              $"({AgreeingReads} agreeing readings). Nothing is sent — this is the log only."
+            : otherPanel
+                ? $"balance  the {Name(p.Panel)} rectangle confirms the same {BalanceParser.Money(value)} silver — " +
+                  "both views agree."
+                : $"balance  still reading {BalanceParser.Money(value)} silver from the {Name(p.Panel)} — unchanged.");
     }
 
     /// <summary>
@@ -317,10 +341,16 @@ public sealed class BalanceBoard
         return t.Length <= 60 ? t : t[..60] + "…";
     }
 
+    /// <summary>
+    /// Say it once, and then not again until the window passes. Keyed on the
+    /// message rather than the picture: these panels drift constantly, and
+    /// per-picture deduplication meant the same refusal every few seconds.
+    /// </summary>
     private void NoteOnce(PanelState p, string message)
     {
-        if (p.LastNote == message) return;
+        if (p.LastNote == message && p.TicksSinceNote < RepeatNoteTicks) return;
         p.LastNote = message;
+        p.TicksSinceNote = 0;
         _note(message);
     }
 
@@ -355,6 +385,9 @@ public sealed class BalanceBoard
 
         public int LastValueAge;
 
+        /// <summary>Ticks since this rectangle last put a line in the log — the repeat window.</summary>
+        public int TicksSinceNote = RepeatNoteTicks;
+
         public string LastNote = "";
 
         /// <summary>
@@ -368,7 +401,6 @@ public sealed class BalanceBoard
             Done = false;
             ReadsThisPicture = 0;
             ValidReads = 0;
-            LastNote = "";
         }
 
         /// <summary>A discontinuity — the frames stopped, the region moved. Nothing carries across one.</summary>

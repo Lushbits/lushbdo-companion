@@ -207,6 +207,37 @@ public class BalanceBoardTests
         Assert.Contains(_notes, n => n.Contains("both views agree"));
     }
 
+    /// <summary>
+    /// A rectangle that keeps confirming the same figure says so periodically
+    /// rather than going silent. Silence was read as breakage twice in one
+    /// session (2026-08-30), which is all the evidence that rule needed.
+    /// </summary>
+    [Fact]
+    public void ARectangleStillReadingTheSameFigureSaysSoEventually()
+    {
+        var board = NewBoard();
+        var panel = BalanceBoard.Panel.Warehouse;
+        var picture = Picture(50);
+        Settle(board, panel, picture);
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, panel, picture, "1,000,000");
+        Assert.Single(_notes);
+
+        // The panel drifts and re-confirms shortly after: still quiet.
+        var drifted = Picture(120);
+        board.Observe(panel, drifted, Length);
+        Read(board, panel, drifted, "1,000,000");
+        Assert.Single(_notes);
+
+        // Once the repeat window has passed, it says it is still reading it.
+        for (var i = 0; i < BalanceBoard.RepeatNoteTicks; i++) board.Observe(panel, drifted, Length);
+        var again = Picture(200);
+        board.Observe(panel, again, Length);
+        Read(board, panel, again, "1,000,000");
+
+        Assert.Equal(2, _notes.Count);
+        Assert.Contains("still reading 1,000,000", _notes[1]);
+    }
+
     /// <summary>Two panels showing the same figure are agreement, not a contradiction.</summary>
     [Fact]
     public void TwoPanelsThatAgreeConfirm()
