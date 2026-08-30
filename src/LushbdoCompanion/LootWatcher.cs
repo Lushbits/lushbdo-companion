@@ -241,21 +241,17 @@ public sealed class LootWatcher : IDisposable
 
     public async Task StartAsync()
     {
-        var balance = _balanceRequested;
-        if (_region is null && balance is null)
+        if (_region is null && _balanceRequested is null)
             throw new InvalidOperationException("there is nothing to watch — no region is picked.");
 
-        // Whichever rectangle exists sizes the reader's preparation; on the
-        // OS recognizer that is a bounds check, and it wants a real one.
-        var sizing = _region ?? balance!.Value.Region;
-        await _reader.StartAsync(sizing.Width, sizing.Height);
+        await _reader.StartAsync();
 
         // The slots are worked out rather than assumed, because the loot log is
         // no longer always present: in silver-only the balance rectangle is the
         // only crop and so it is slot 0.
         var regions = new List<Rectangle>(2);
         if (_region is { } loot) { _lootSlot = regions.Count; regions.Add(loot); }
-        if (balance is { } watch) { _balanceSlot = regions.Count; regions.Add(watch.Region); }
+        if (_balanceRequested is { } watch) { _balanceSlot = regions.Count; regions.Add(watch.Region); }
 
         _source.Tick += OnTick;
         _source.Failed += OnFailed;

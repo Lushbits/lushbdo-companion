@@ -8,9 +8,10 @@ namespace LushbdoCompanion;
 
 /// <summary>
 /// The unmanaged plumbing beneath Windows.Graphics.Capture: a D3D11 device for
-/// the frame pool, the factory that turns an HWND into a capture item, and
-/// raw byte access to SoftwareBitmap pixels. Passive by construction — every
-/// entry point here produces pixels, none of them sends input anywhere.
+/// the frame pool, the factory that turns an HWND into a capture item, and the
+/// GPU-side crop that keeps a whole frame off the bus. Passive by construction
+/// — every entry point here produces pixels, none of them sends input
+/// anywhere.
 /// </summary>
 internal static class CaptureInterop
 {
@@ -72,14 +73,6 @@ internal static class CaptureInterop
         var abi = GraphicsCaptureItem.As<IGraphicsCaptureItemInterop>().CreateForWindow(hwnd, ref iid);
         try { return GraphicsCaptureItem.FromAbi(abi); }
         finally { Marshal.Release(abi); }
-    }
-
-    // --- Raw pixels of a SoftwareBitmap -------------------------------------
-
-    [ComImport, Guid("5B0D3235-4DBA-4D44-865E-8F1D0E4FD04D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    public unsafe interface IMemoryBufferByteAccess
-    {
-        void GetBuffer(out byte* buffer, out uint capacity);
     }
 
     // --- GPU-side crop -------------------------------------------------------

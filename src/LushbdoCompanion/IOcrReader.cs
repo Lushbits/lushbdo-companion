@@ -37,9 +37,14 @@ public interface IOcrReader : IDisposable
 
     /// <summary>
     /// Prepare the reader; throws with a member-readable reason if it cannot
-    /// run at all (no language pack, no models).
+    /// run at all — for PaddleOCR, models that will not unpack.
+    ///
+    /// It took the frame's dimensions until the OS recognizer left, because
+    /// that one sized its upscale by them and refused a region past
+    /// `OcrEngine.MaxImageDimension`. Nothing reads them now, and a parameter
+    /// no implementation reads is a lie about what the seam needs.
     /// </summary>
-    Task StartAsync(int frameWidth, int frameHeight);
+    Task StartAsync();
 
     /// <summary>
     /// Read the frame. Pieces come back positioned in capture pixels.

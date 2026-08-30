@@ -89,6 +89,16 @@ public sealed class Settings
     [JsonIgnore]
     public bool HasScreenRelativeRegion => RegionWidth > 0 && RegionHeight > 0;
 
+    /// <summary>
+    /// This install had chosen the OS recognizer, which no longer exists. Set
+    /// on load and never persisted, so the tray can say what became of that
+    /// choice instead of silently moving the member onto the heavier reader —
+    /// which is the one thing they had opted out of, and the reason the
+    /// silver-only mode is worth pointing them at.
+    /// </summary>
+    [JsonIgnore]
+    public bool HadWindowsOcrPreference { get; private set; }
+
     public Rectangle? RegionFor(RegionKind kind) => kind switch
     {
         RegionKind.Loot => WindowRegionWidth > 0 && WindowRegionHeight > 0
@@ -159,6 +169,11 @@ public sealed class Settings
                 // member opens Settings or switches recognizer, and a plaintext
                 // credential must not wait on that.
                 var scrub = HasPlaintextToken(json);
+                if (ChoseWindowsOcr(json))
+                {
+                    settings.HadWindowsOcrPreference = true;
+                    scrub = true;
+                }
                 // A warehouse rectangle from an older build becomes the one
                 // remaining rectangle rather than being thrown away — the
                 // member aimed it at their balance, and re-aiming it at the
@@ -178,6 +193,27 @@ public sealed class Settings
             // A mangled file is a fresh start, not a crash at the tray.
         }
         return new Settings();
+    }
+
+    /// <summary>
+    /// Did this install ask for the OS recognizer? The setting is gone, so the
+    /// key is read once to explain its disappearance and then scrubbed. Only
+    /// `true` counts: somebody who left it off chose nothing and needs telling
+    /// nothing.
+    /// </summary>
+    private static bool ChoseWindowsOcr(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("UseWindowsOcr", out var chosen)
+                && chosen.ValueKind == JsonValueKind.True;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

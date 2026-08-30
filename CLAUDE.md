@@ -58,11 +58,13 @@ dotnet publish src/LushbdoCompanion -c Release   # the shippable single exe
 
 Target framework is `net8.0-windows10.0.22621.0` with
 `SupportedOSPlatformVersion` 10.0.19041.0 on purpose — the 19041 floor is what
-makes `Windows.Graphics.Capture` and `Windows.Media.Ocr` reachable, and the
+makes `Windows.Graphics.Capture` reachable (it carried `Windows.Media.Ocr` too
+until that recognizer was dropped, so capture alone holds the floor now), and the
 22621 target additionally projects the Windows 11 capture-border-off API
 (runtime-guarded via `ApiInformation`, so the exe still runs on 19041).
-Publish is self-contained single-file: users install nothing, so nothing here
-may grow a dependency that breaks that (no installers, no runtime prereqs).
+Publish is self-contained single-file: users install nothing beyond the one
+prerequisite below, so nothing here may grow a second one (no installers, and
+no runtime prereq that a machine running Black Desert does not already have).
 The recognizer is PaddleOCR PP-OCRv5 through ONNX Runtime, which is why the
 exe went from 78 MB to 103 MB: the ONNX and Skia natives ride inside it via
 `IncludeNativeLibrariesForSelfExtract`, and the four model files ride as

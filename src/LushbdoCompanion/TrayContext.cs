@@ -109,6 +109,11 @@ public sealed class TrayContext : ApplicationContext
         _log.Append(_settings.IsPaired
             ? $"Paired. Site: {_settings.BaseUrl}"
             : "Not paired yet — open Settings and paste a device token from the site's Devices page.");
+        if (_settings.HadWindowsOcrPreference)
+            _log.Append("You had \"Read with Windows OCR\" switched on. That option is gone — it read barely half " +
+                        "the loot rows and could not read a silver balance at all. If you turned it on to save CPU, " +
+                        "the setting that does that properly is \"Watch silver only\", which skips the loot log " +
+                        "instead of reading it badly.");
         LogRegions();
 
         if (!_settings.IsPaired) ShowSettings();
@@ -473,11 +478,27 @@ public sealed class TrayContext : ApplicationContext
         {
             watcher.Dispose();
             _log.Append($"Could not start watching: {e.Message}");
-            _log.Append("If that mentions a missing DLL, install the Microsoft Visual C++ 2015-2022 " +
-                        "Redistributable (x64) — Black Desert normally installs it, so this is rare.");
+            // Only when the failure is actually about a missing native library.
+            // Telling somebody on Windows 10 1909 to install a redistributable
+            // is advice that cannot help them.
+            if (LooksLikeMissingNativeLibrary(e))
+                _log.Append("That is the native runtime PaddleOCR needs: install the Microsoft Visual C++ " +
+                            "2015-2022 Redistributable (x64). Black Desert normally installs it, so this is rare.");
             ShowLog();
             return null;
         }
+    }
+
+    /// <summary>
+    /// A DllNotFoundException, or a load failure carrying one underneath it —
+    /// which is how a missing MSVCP140 surfaces through ONNX Runtime's own
+    /// initialisation rather than as a clean throw at the P/Invoke boundary.
+    /// </summary>
+    private static bool LooksLikeMissingNativeLibrary(Exception error)
+    {
+        for (var e = error; e is not null; e = e.InnerException)
+            if (e is DllNotFoundException or BadImageFormatException) return true;
+        return false;
     }
 
     private void StopWatching(string message)
