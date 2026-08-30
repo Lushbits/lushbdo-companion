@@ -17,7 +17,9 @@
     <Compile Include="..\LushbdoCompanion\FrameStabilizer.cs" Link="app\FrameStabilizer.cs" />
     <Compile Include="..\LushbdoCompanion\TextKeyer.cs" Link="app\TextKeyer.cs" />
     <Compile Include="..\LushbdoCompanion\OcrRows.cs" Link="app\OcrRows.cs" />
-    <Compile Include="..\LushbdoCompanion\FrameDelta.cs" Link="app\FrameDelta.cs" />
+    <!-- Not app code: the strip read it serves was reverted, so it lives with
+         the eval harness that still measures with it. See its own summary. -->
+    <Compile Include="..\LushbdoCompanion.Eval\FrameDelta.cs" Link="eval\FrameDelta.cs" />
     <Compile Include="..\LushbdoCompanion\IFrameSource.cs" Link="app\IFrameSource.cs" />
   </ItemGroup>
 

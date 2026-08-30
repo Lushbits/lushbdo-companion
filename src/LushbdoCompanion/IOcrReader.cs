@@ -43,9 +43,7 @@ public interface IOcrReader : IDisposable
     Task StartAsync(int frameWidth, int frameHeight);
 
     /// <summary>
-    /// Read rows <paramref name="top"/> (inclusive) to <paramref name="bottom"/>
-    /// (exclusive) of the frame. Pieces come back positioned against the whole
-    /// frame, not the window, so the caller never has to add the offset back.
+    /// Read the frame. Pieces come back positioned in capture pixels.
     /// </summary>
-    Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height, int top, int bottom);
+    Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height);
 }

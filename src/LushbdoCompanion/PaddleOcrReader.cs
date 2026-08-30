@@ -37,7 +37,6 @@ public sealed class PaddleOcrReader : IOcrReader
 
     private RapidOcr? _ocr;
     private RapidOcrOptions _options = RapidOcrOptions.Default;
-    private byte[] _strip = [];
 
     public Task StartAsync(int frameWidth, int frameHeight)
     {
@@ -56,16 +55,25 @@ public sealed class PaddleOcrReader : IOcrReader
         return Task.CompletedTask;
     }
 
-    public async Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height, int top, int bottom)
+    public async Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height)
     {
-        var rows = bottom - top;
-        var need = width * rows * 4;
-        if (_strip.Length != need) _strip = new byte[need];
-        Buffer.BlockCopy(bgra, top * width * 4, _strip, 0, need);
-
-        var info = new SKImageInfo(width, rows, SKColorType.Bgra8888, SKAlphaType.Opaque);
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Opaque);
         using var bitmap = new SKBitmap(info);
-        System.Runtime.InteropServices.Marshal.Copy(_strip, 0, bitmap.GetPixels(), need);
+        var pixels = bitmap.GetPixels();
+        var stride = width * 4;
+        if (bitmap.RowBytes == stride)
+        {
+            System.Runtime.InteropServices.Marshal.Copy(bgra, 0, pixels, height * stride);
+        }
+        else
+        {
+            // Skia is free to pad its rows, and a contiguous copy into a padded
+            // bitmap shears the frame progressively — which OCR would still
+            // read plausible-looking text out of, the one failure shape nothing
+            // downstream could catch.
+            for (var y = 0; y < height; y++)
+                System.Runtime.InteropServices.Marshal.Copy(bgra, y * stride, pixels + y * bitmap.RowBytes, stride);
+        }
         // Off the caller's thread: this is the capture source's timer callback,
         // and a few hundred milliseconds of inference on it is a stalled
         // capture. Windows.Media.Ocr was asynchronous for free; this one has to
@@ -84,7 +92,7 @@ public sealed class PaddleOcrReader : IOcrReader
                 blockTop = Math.Min(blockTop, point.Y);
                 blockBottom = Math.Max(blockBottom, point.Y);
             }
-            pieces.Add(new OcrRows.Piece(x, blockTop + top, blockBottom - blockTop, text));
+            pieces.Add(new OcrRows.Piece(x, blockTop, blockBottom - blockTop, text));
         }
         return pieces;
     }

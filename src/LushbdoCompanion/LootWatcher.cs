@@ -11,22 +11,21 @@ namespace LushbdoCompanion;
 /// flattens the animated world to black (#2, #18).
 ///
 /// Keying is now the *gate*, not the reading. It answers "did the text
-/// change" per frame, which is what keeps an idle chat free whatever the
-/// world behind it is doing, and <see cref="FrameDelta"/> takes it further
-/// and answers "which rows changed" — so a pass reads the handful of rows
-/// that are new rather than the whole region. The reading itself is
+/// change" per frame, and that one question is what keeps an idle chat free
+/// whatever the world behind it is doing. The reading itself is
 /// <see cref="IOcrReader"/>'s, and the default reader wants the raw frame
 /// instead: PaddleOCR is a scene-text model and a transparent chat over a
 /// moving world is its home ground, where it reads 963 of 1020 field rows
 /// against Windows.Media.Ocr's 550.
 ///
-/// A row still needs two clean reads before it counts, and they must be two
-/// *different* frames — so the read window always reaches back over what
-/// arrived last pass, and rows above it keep the readings they already had.
-/// An unchanged keyed frame reconfirms all of them for free. OCR fragments
-/// that share a visual row are merged left to right (the icon column splits
-/// a row); the LineBoard sees whole rows, decides what is genuinely new, and
-/// hands confirmed pickups to the sender. Nothing is ever sent on one
+/// Every pass reads the whole region. Reading only the rows that changed and
+/// carrying the rest was tried and reverted — see the note at the read itself
+/// for why it is unsound against this board. A row still needs two clean
+/// reads before it counts, and an unchanged keyed frame reconfirms the
+/// previous ones for free. OCR fragments that share a visual row are merged
+/// left to right (the icon column splits a row); the LineBoard sees whole
+/// rows, decides what is genuinely new, and hands confirmed pickups to the
+/// sender. Nothing is ever sent on one
 /// frame's word. The source owns the game window's lifecycle; a gap in
 /// frames means the game went away, and what follows one is a fresh
 /// baseline.
@@ -56,7 +55,7 @@ public sealed class LootWatcher : IDisposable
 
     private int _frameWidth;
     private int _frameHeight;
-    private byte[] _keyed = [];        // this frame's keyed text: the change gate, and what the delta reads
+    private byte[] _keyed = [];        // this frame's keyed text — the change gate
     private byte[] _lastKeyed = [];    // the previous OCR pass's keyed text
     private byte[] _raw = [];          // this frame's pixels as captured — the source reuses its own buffer
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
@@ -71,6 +70,7 @@ public sealed class LootWatcher : IDisposable
     private long _pickups;
     private int _nullTicks;
     private int _ocrBusy;
+    private int _readerDisposed;
     private bool _announced;
     private volatile string? _resetReason;
     private string _lastFailure = "";
@@ -256,7 +256,7 @@ public sealed class LootWatcher : IDisposable
         {
             _announced = true;
             Log($"Capture is live: {frame.Width}×{frame.Height}px region, read by {_reader.Name}" +
-                " — text keyed per frame, and only the rows that changed are read.");
+                " — text keyed per frame, and read only when it changes.");
             _sinceLastLogged.Restart();
         }
 
@@ -324,8 +324,6 @@ public sealed class LootWatcher : IDisposable
             // may never produce. That is its own piece of work with its own
             // field proof, not a tuning change. FrameDelta stays for the eval
             // harness and for that work; the watcher reads everything.
-            if (_trace is not null) Trace($"read  rows 0..{_frameHeight} of {_frameHeight}");
-
             // The buffer and its shape are pinned here, while the flag is
             // held: a resize between now and the read landing would otherwise
             // hand the reader a freshly allocated frame mid-pass.
@@ -342,7 +340,7 @@ public sealed class LootWatcher : IDisposable
     {
         try
         {
-            var pieces = await _reader.ReadAsync(input, width, height, 0, height);
+            var pieces = await _reader.ReadAsync(input, width, height);
             _ocrPasses++;
             if (_disposed) return;
             TracePieces(pieces);
@@ -362,7 +360,21 @@ public sealed class LootWatcher : IDisposable
         finally
         {
             Volatile.Write(ref _ocrBusy, 0);
+            // Dispose could not take the reader while this pass held the flag.
+            if (_disposed) DisposeReader();
         }
+    }
+
+    /// <summary>
+    /// Once, from whichever of Dispose and the last pass gets there second.
+    /// The reader is not a managed buffer the GC will quietly reclaim: it owns
+    /// ONNX inference sessions over native memory and the model weights they
+    /// were built from, and re-picking the region mid-session stops a watcher
+    /// while a pass is very much in flight.
+    /// </summary>
+    private void DisposeReader()
+    {
+        if (Interlocked.Exchange(ref _readerDisposed, 1) == 0) _reader.Dispose();
     }
 
     private void OnConfirmedPickup(string name, int count, string settledReading)
@@ -400,7 +412,9 @@ public sealed class LootWatcher : IDisposable
             _trace?.Dispose();
             _trace = null;
         }
+        // If a pass holds the flag it is mid-read and owns the reader; its
+        // finally sees _disposed and hands it over.
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) == 0)
-            _reader.Dispose(); // otherwise the in-flight pass finishes and the GC takes it
+            DisposeReader();
     }
 }

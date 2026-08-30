@@ -23,14 +23,17 @@ same ToS class as streaming software. No feature is worth bending them.
   drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
   background is transparent by design (owner decision, #2), so raw pixels
   always change — each frame is text-keyed (bright core with dark outline
-  within reach, the game's own text contract), and keying is what the app
-  spends its cheap work on: it answers "did the text change" per frame, and
-  `FrameDelta` answers "which rows changed", so a pass reads a strip of new
-  rows rather than a region. Reading itself is not cheap — PaddleOCR costs
-  ~36 ms of one core per row against Windows.Media.Ocr's whole-frame 60 ms —
-  so the bill is deliberately made to scale with the loot rate and to be zero
-  when the chat is still. Steady state allocates nothing, and the process runs
-  below normal priority so the game always wins the CPU.
+  within reach, the game's own text contract), and keying is the cheap work
+  the app does on every frame so it can skip the expensive work: it answers
+  "did the text change", and a frame whose text did not change is never read.
+  Reading is not cheap — a PaddleOCR pass over the region costs ~340 ms wall,
+  about 0.74 core-seconds, against Windows.Media.Ocr's 60 ms — so the gate is
+  what carries the budget. A measured wolf-grind session ran OCR on a fifth of
+  its ticks and averaged 29% of one core. Reading only the rows that changed
+  would halve that again and was tried; it is unsound against the board and
+  the reasons are on `FrameDelta`, which now lives with the eval harness.
+  Steady state allocates nothing, and the process runs below normal priority
+  so the game always wins the CPU.
 
 ## The contract
 
@@ -87,7 +90,7 @@ is skipped app-side, nothing is sent on one frame's word — are recorded in
 #2's comments. Dedup keys line identity on position in the scroll stream
 (text-anchored, voted across OCR passes), and every ambiguity resolves the
 same direction: a visible undercount, never a double count. Logic that can
-run without Windows (parser, keyer, delta, board) is link-compiled into
+run without Windows (parser, keyer, board) is link-compiled into
 `src/LushbdoCompanion.Tests`; `dotnet test src/LushbdoCompanion.Tests` runs
 it.
 
