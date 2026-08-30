@@ -99,51 +99,48 @@ Three things to know while it runs:
 
 ### Watching your silver balance
 
-Optional, and off until you pick a rectangle for it. The warehouse figure and
-the market figure are **one number shown in two places**, never two to add —
-either reading is the whole answer.
+Optional, and off until you pick a rectangle for it. **One rectangle, aimed at
+the Central Market panel** — the figure it shows there (`Warehouse Balance`) is
+the same silver the warehouse panel shows, so either would do, and the market
+one is the one this app reads.
 
-**Open the panel in-game first**, then from the tray icon: **Watched regions →
-Warehouse silver** (or marketplace). The picker photographs the
-game as it is *right now*, so with the panel closed there is nothing to drag a
-rectangle around. If the game closed the panel when you tabbed away, press Esc
-and the app offers to pick on the live screen after a three-second countdown
-instead.
+That is not arbitrary. The warehouse panel draws its balance beside the
+Withdraw button, and that button's hover overlay physically covers the last
+group of digits — the app read `23,975,827` for `23,975,827,939` three times
+running in testing. A crop like that contains a complete, well-formed, *wrong*
+number, which nothing downstream can detect: the strict shape passes it (a
+truncated grouped number is still grouped) and re-reading passes it (it repeats
+while the overlay is up). The market panel has nothing that hovers over its
+figure, so the fix is to read the panel that does not have the problem.
 
-**The two panels put the figure in different places** — the warehouse at the
-bottom of its panel, the central market at the top of its own — which is why
-there are two rectangles rather than one. A rectangle picked over the warehouse
-sees only scenery when the market is what is open.
+**Open the Central Market in-game first**, then from the tray icon: **Watched
+regions → Marketplace silver**. The picker photographs the game as it is *right
+now*, so with the panel closed there is nothing to drag a rectangle around. If
+the game closed the panel when you tabbed away, press Esc and the app offers to
+pick on the live screen after a three-second countdown instead.
 
 Drag it around the digits with a little room to spare — the recognizer needs
-some margin around the text to find it at all — but **keep buttons out of the
-rectangle**. A button's hover overlay can cover part of the figure, and then
-the app is reading a number that is genuinely missing its last few digits with
-nothing to mark it as incomplete. That is the one failure the strict shape
-cannot catch, because a truncated grouped number is still a grouped number.
-Two rectangles are the only defence against it, which is a reason to aim both
-rather than one.
+some margin to find the text at all — and **keep buttons out of the rectangle**,
+for the reason above.
 
-Both rectangles are independently optional — pick neither, one, or both. They
-ride the same **Start watching** toggle and the same capture as the loot log,
-because a second capture session would double what the compositor does per
+It rides the same **Start watching** toggle and the same capture as the loot
+log, because a second capture session would double what the compositor does per
 tick. **Watching is all or nothing**: there is no silver-only mode and no
 per-region switch. To stop watching something, remove its region.
 
-**Watched regions** lists all three with the size and position each is set to,
-or `not picked yet`. Clicking one picks it again, and each has its own
-**Forget**, so a rectangle that is aimed wrong can be dropped without
-disturbing one that is not. Forgetting the loot log is allowed too — watching
-then stops until you pick one again, because the single capture is aimed at
-it.
+**Watched regions** lists both rectangles with the size and position each is
+set to, or `not picked yet`. Clicking one picks it again, and each has its own
+**Forget**. Forgetting the loot log is allowed too — watching then stops until
+you pick one again, because the single capture is aimed at it.
 
 **Nothing is sent.** This step reads the figure and writes it to the log;
 feeding it to the site is separate work. Three things the log tells apart:
 
 - nothing at all — no panel is open over the rectangle, so nothing was read
 - read but not confirmed, with the reason — a shape the app will not stand
-  behind, readings that never agreed, or two panels disagreeing
-- confirmed at a value
+  behind, or readings that never agreed
+- confirmed at a value, and every couple of minutes after that, that it is
+  still reading the same one
 
 A figure the app is not sure of is never confirmed, and it is strict on
 purpose: a balance has no register behind it the way a loot line does, so
@@ -154,7 +151,7 @@ it. When it refuses, the figure you already have stands.
 
 **Windows OCR does not read balances.** It reads comma-grouped numbers as
 letters (0 of 1,332 read correctly in the app's own bake-off), so with *Read
-with Windows OCR* ticked the silver rectangles are skipped and the log says so,
+with Windows OCR* ticked the silver rectangle is skipped and the log says so,
 rather than spending passes to confirm nothing.
 
 On Windows 11 the app asks the OS to skip the yellow "this window is being
@@ -171,7 +168,7 @@ border around the game window is unavoidable there, same as with OBS.
 - OCR reads the median-stabilized image at half the capture pace, and only
   when that image actually changed — a still scene costs a few milliseconds
   of arithmetic per tick and no OCR at all.
-- The silver rectangles are gated the opposite way round, on **stillness**:
+- The silver rectangle is gated the opposite way round, on **stillness**:
   two consecutive frames near-identical means a panel is up and worth a look,
   anything else is the moving world and is dropped before any reading. With no
   panel open that is one sampled diff over a few thousand pixels per tick and

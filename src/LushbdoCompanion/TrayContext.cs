@@ -59,8 +59,8 @@ public sealed class TrayContext : ApplicationContext
             {
                 ToolTipText = kind == Settings.RegionKind.Loot
                     ? "Click to pick the loot chat rectangle. Drag it around the chat text."
-                    : "Open the panel in-game first, then click. Drag around the silver figure and as " +
-                      "little else — a neighbouring button inside the rectangle spoils the read.",
+                    : "Open the Central Market in-game first, then click. Drag around its Warehouse Balance " +
+                      "figure and keep buttons out of the rectangle — a hover overlay can cover the digits.",
             };
             _regionItems[kind] = item;
             regions.DropDownItems.Add(item);
@@ -123,7 +123,7 @@ public sealed class TrayContext : ApplicationContext
     }
 
     private static readonly Settings.RegionKind[] RegionKinds =
-        [Settings.RegionKind.Loot, Settings.RegionKind.Warehouse, Settings.RegionKind.Marketplace];
+        [Settings.RegionKind.Loot, Settings.RegionKind.Marketplace];
 
     /// <summary>
     /// Put every rectangle's current state on its own menu item — set or not,
@@ -174,7 +174,6 @@ public sealed class TrayContext : ApplicationContext
     private static string RegionName(Settings.RegionKind kind) => kind switch
     {
         Settings.RegionKind.Loot => "Loot log",
-        Settings.RegionKind.Warehouse => "Warehouse silver",
         _ => "Marketplace silver",
     };
 
@@ -189,21 +188,16 @@ public sealed class TrayContext : ApplicationContext
     {
         Settings.RegionKind.Loot =>
             "This is a frozen frame of the game window — drag a rectangle around its loot chat tab. Esc cancels.",
-        Settings.RegionKind.Warehouse =>
-            "Open the warehouse in-game first. This is a frozen frame of the game window — drag a rectangle around " +
-            "the warehouse's silver figure. If the warehouse is not in this picture, press Esc and pick again with " +
-            "it open. Esc cancels.",
         _ =>
-            "Open the central market in-game first. This is a frozen frame of the game window — drag a rectangle " +
-            "around its silver figure. If the market is not in this picture, press Esc and pick again with it open. " +
-            "Esc cancels.",
+            "Open the Central Market in-game first. This is a frozen frame of the game window — drag a rectangle " +
+            "around its Warehouse Balance figure, and keep any buttons out of it. If the market is not in this " +
+            "picture, press Esc and pick again with it open. Esc cancels.",
     };
 
     private static string LivePickerHint(Settings.RegionKind kind) => kind switch
     {
         Settings.RegionKind.Loot => "Drag a rectangle around the game's loot chat tab — Esc cancels",
-        Settings.RegionKind.Warehouse => "With the warehouse open, drag a rectangle around its silver figure — Esc cancels",
-        _ => "With the central market open, drag a rectangle around its silver figure — Esc cancels",
+        _ => "With the Central Market open, drag a rectangle around its silver figure — Esc cancels",
     };
 
     /// <summary>
@@ -424,9 +418,7 @@ public sealed class TrayContext : ApplicationContext
         {
             IOcrReader reader = which == "windows" ? new WindowsOcrReader() : new PaddleOcrReader();
             var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add, reader: reader,
-                balanceRegions: [.. _settings.BalanceRegions.Select(b => (
-                    b.Kind == Settings.RegionKind.Warehouse ? BalanceBoard.Panel.Warehouse : BalanceBoard.Panel.Marketplace,
-                    b.Rect))]);
+                    balanceRegion: _settings.BalanceRegion);
             try
             {
                 await watcher.StartAsync();

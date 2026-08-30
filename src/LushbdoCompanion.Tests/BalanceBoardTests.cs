@@ -25,21 +25,20 @@ public class BalanceBoardTests
     }
 
     /// <summary>The first frame of a picture is only a baseline; the second is when stillness is knowable.</summary>
-    private static void Settle(BalanceBoard board, BalanceBoard.Panel panel, byte[] picture) =>
-        board.Observe(panel, picture, Length);
+    private static void Settle(BalanceBoard board, byte[] picture) => board.Observe(picture, Length);
 
-    private static void Read(BalanceBoard board, BalanceBoard.Panel panel, byte[] picture, string text)
+    private static void Read(BalanceBoard board, byte[] picture, string text)
     {
-        Assert.True(board.Observe(panel, picture, Length), "the gate should have wanted this read");
-        board.TakeRead(panel);
-        board.Ingest(panel, text);
+        Assert.True(board.Observe(picture, Length), "the gate should have wanted this read");
+        board.TakeRead();
+        board.Ingest(text);
     }
 
     [Fact]
     public void TheFirstFrameIsOnlyABaseline()
     {
         var board = NewBoard();
-        Assert.False(board.Observe(BalanceBoard.Panel.Warehouse, Picture(50), Length));
+        Assert.False(board.Observe(Picture(50), Length));
     }
 
     /// <summary>
@@ -51,7 +50,7 @@ public class BalanceBoardTests
     {
         var board = NewBoard();
         for (var i = 0; i < 10; i++)
-            Assert.False(board.Observe(BalanceBoard.Panel.Warehouse, Picture((byte)(i * 20)), Length));
+            Assert.False(board.Observe(Picture((byte)(i * 20)), Length));
         Assert.Equal(0, board.Reads);
     }
 
@@ -59,15 +58,14 @@ public class BalanceBoardTests
     public void ConfirmsOnlyAfterThreeAgreeingReadings()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
+        Settle(board, picture);
 
-        Read(board, panel, picture, "Silver 1,234,567");
+        Read(board, picture, "Silver 1,234,567");
         Assert.Null(board.Confirmed);
-        Read(board, panel, picture, "Silver 1,234,567");
+        Read(board, picture, "Silver 1,234,567");
         Assert.Null(board.Confirmed);
-        Read(board, panel, picture, "Silver 1,234,567");
+        Read(board, picture, "Silver 1,234,567");
 
         Assert.Equal(1234567L, board.Confirmed);
         Assert.Contains(_notes, n => n.Contains("confirmed 1,234,567"));
@@ -81,12 +79,11 @@ public class BalanceBoardTests
     public void DisagreeingReadingsNeverConfirm()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
+        Settle(board, picture);
 
         for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++)
-            Read(board, panel, picture, i % 2 == 0 ? "1,234,567" : "7,654,321");
+            Read(board, picture, i % 2 == 0 ? "1,234,567" : "7,654,321");
 
         Assert.Null(board.Confirmed);
         Assert.Contains(_notes, n => n.Contains("without 3 agreeing readings"));
@@ -97,114 +94,15 @@ public class BalanceBoardTests
     public void ARefusedShapeIsExplainedOnce()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
+        Settle(board, picture);
 
         for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++)
-            Read(board, panel, picture, "Silver 1,00");
+            Read(board, picture, "Silver 1,00");
 
         Assert.Null(board.Confirmed);
         Assert.Single(_notes);
         Assert.Contains("1,00", _notes[0]);
-    }
-
-    /// <summary>
-    /// The owner ruling: the two panels are two views of one number. Disagreeing
-    /// is proof that one of them was misread, so neither is believed.
-    /// </summary>
-    [Fact]
-    public void TwoPanelsThatDisagreeConfirmNothing()
-    {
-        var board = NewBoard();
-        var warehouse = Picture(50);
-        var market = Picture(90);
-        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
-        Settle(board, BalanceBoard.Panel.Marketplace, market);
-
-        Read(board, BalanceBoard.Panel.Warehouse, warehouse, "1,000,000");
-        Read(board, BalanceBoard.Panel.Warehouse, warehouse, "1,000,000");
-        Read(board, BalanceBoard.Panel.Marketplace, market, "2,000,000");
-        Read(board, BalanceBoard.Panel.Warehouse, warehouse, "1,000,000");
-
-        Assert.Null(board.Confirmed);
-        Assert.Contains(_notes, n => n.Contains("one of them is misread"));
-    }
-
-    /// <summary>
-    /// The rule had to survive the other rectangle going quiet, or it never
-    /// fired at all. Field case (2026-08-30 16:02): one rectangle read
-    /// 23,975,827,939, then read nothing for a few ticks as its panel drifted,
-    /// and meanwhile the other confirmed the same figure with its last group
-    /// truncated. Nothing compared them, because "reads nothing right now"
-    /// counted as "has nothing to say".
-    /// </summary>
-    [Fact]
-    public void AQuietPanelStillContradictsTheOtherOne()
-    {
-        var board = NewBoard();
-        var market = Picture(90);
-        var warehouse = Picture(50);
-        Settle(board, BalanceBoard.Panel.Marketplace, market);
-        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
-
-        Read(board, BalanceBoard.Panel.Marketplace, market, "23,975,827,939");
-        // Its panel drifts away and it reads nothing for a while — which is not
-        // a retraction of what it just said.
-        for (var i = 0; i < 3; i++) Read(board, BalanceBoard.Panel.Marketplace, market, "");
-
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
-            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "Warehouse Bé Withd 23,975,827");
-
-        Assert.Null(board.Confirmed);
-        Assert.Contains(_notes, n => n.Contains("one of them is misread"));
-    }
-
-    /// <summary>
-    /// ...but only for a while. A reading old enough that the balance could
-    /// legitimately have moved on is not evidence any more, and must not block
-    /// the other rectangle forever.
-    /// </summary>
-    [Fact]
-    public void StaleEvidenceAgesOutAndStopsBlocking()
-    {
-        var board = NewBoard();
-        var market = Picture(90);
-        var warehouse = Picture(50);
-        Settle(board, BalanceBoard.Panel.Marketplace, market);
-        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
-        Read(board, BalanceBoard.Panel.Marketplace, market, "1,000,000");
-
-        for (var i = 0; i <= BalanceBoard.CrossCheckTicks; i++)
-            board.Observe(BalanceBoard.Panel.Marketplace, market, Length);
-
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
-            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "2,000,000");
-
-        Assert.Equal(2_000_000L, board.Confirmed);
-    }
-
-    /// <summary>
-    /// The cross-check passing is worth a log line. It used to be trace-only,
-    /// so a member who had just aimed a second rectangle saw silence and read
-    /// it as the rectangle not working.
-    /// </summary>
-    [Fact]
-    public void TheSecondRectangleAgreeingIsSaidOutLoud()
-    {
-        var board = NewBoard();
-        var warehouse = Picture(50);
-        var market = Picture(90);
-        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
-        Settle(board, BalanceBoard.Panel.Marketplace, market);
-
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
-            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "1,000,000");
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
-            Read(board, BalanceBoard.Panel.Marketplace, market, "1,000,000");
-
-        Assert.Equal(1_000_000L, board.Confirmed);
-        Assert.Contains(_notes, n => n.Contains("both views agree"));
     }
 
     /// <summary>
@@ -216,43 +114,25 @@ public class BalanceBoardTests
     public void ARectangleStillReadingTheSameFigureSaysSoEventually()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, panel, picture, "1,000,000");
+        Settle(board, picture);
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "1,000,000");
         Assert.Single(_notes);
 
         // The panel drifts and re-confirms shortly after: still quiet.
         var drifted = Picture(120);
-        board.Observe(panel, drifted, Length);
-        Read(board, panel, drifted, "1,000,000");
+        board.Observe(drifted, Length);
+        Read(board, drifted, "1,000,000");
         Assert.Single(_notes);
 
         // Once the repeat window has passed, it says it is still reading it.
-        for (var i = 0; i < BalanceBoard.RepeatNoteTicks; i++) board.Observe(panel, drifted, Length);
+        for (var i = 0; i < BalanceBoard.RepeatNoteTicks; i++) board.Observe(drifted, Length);
         var again = Picture(200);
-        board.Observe(panel, again, Length);
-        Read(board, panel, again, "1,000,000");
+        board.Observe(again, Length);
+        Read(board, again, "1,000,000");
 
         Assert.Equal(2, _notes.Count);
         Assert.Contains("still reading 1,000,000", _notes[1]);
-    }
-
-    /// <summary>Two panels showing the same figure are agreement, not a contradiction.</summary>
-    [Fact]
-    public void TwoPanelsThatAgreeConfirm()
-    {
-        var board = NewBoard();
-        var warehouse = Picture(50);
-        var market = Picture(90);
-        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
-        Settle(board, BalanceBoard.Panel.Marketplace, market);
-
-        Read(board, BalanceBoard.Panel.Marketplace, market, "1,000,000");
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
-            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "1,000,000");
-
-        Assert.Equal(1_000_000L, board.Confirmed);
     }
 
     /// <summary>
@@ -263,13 +143,12 @@ public class BalanceBoardTests
     public void AConfirmedPictureIsNotReadAgain()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, panel, picture, "1,000,000");
+        Settle(board, picture);
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "1,000,000");
 
         var before = board.Reads;
-        for (var i = 0; i < 20; i++) Assert.False(board.Observe(panel, picture, Length));
+        for (var i = 0; i < 20; i++) Assert.False(board.Observe(picture, Length));
         Assert.Equal(before, board.Reads);
     }
 
@@ -278,14 +157,13 @@ public class BalanceBoardTests
     public void AChangedPictureIsReadAgain()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var first = Picture(50);
-        Settle(board, panel, first);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, panel, first, "1,000,000");
+        Settle(board, first);
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, first, "1,000,000");
 
         var second = Picture(120);
-        Assert.False(board.Observe(panel, second, Length)); // it moved to get here
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, panel, second, "2,000,000");
+        Assert.False(board.Observe(second, Length)); // it moved to get here
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, second, "2,000,000");
 
         Assert.Equal(2_000_000L, board.Confirmed);
     }
@@ -298,18 +176,17 @@ public class BalanceBoardTests
     public void OnePictureIsWorthAtMostSixPasses()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
+        Settle(board, picture);
 
-        for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++) Read(board, panel, picture, "no digits here");
-        for (var i = 0; i < 50; i++) Assert.False(board.Observe(panel, picture, Length));
+        for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++) Read(board, picture, "no digits here");
+        for (var i = 0; i < 50; i++) Assert.False(board.Observe(picture, Length));
         Assert.Equal(BalanceBoard.ReadsPerPicture, board.Reads);
     }
 
     /// <summary>
-    /// The bug the first field trace caught (2026-08-30 15:45): these panels
-    /// drift between reads, so every read arrived under a "new picture" and
+    /// The bug the first field trace caught (2026-08-30 15:45): the panel
+    /// drifts between reads, so every read arrived under a "new picture" and
     /// the vote restarted at one. The real figure was read correctly five
     /// times and confirmed none of them. Agreement belongs to the reading, not
     /// to the pixels.
@@ -318,7 +195,6 @@ public class BalanceBoardTests
     public void APanelThatDriftsBetweenReadsStillConfirms()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         const string field = "Warehouse Balance 23,975,827,939";
 
         for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
@@ -326,8 +202,8 @@ public class BalanceBoardTests
             // Each read sits on its own slightly different picture, with the
             // world moving in between — exactly the shape of the trace.
             var drifted = Picture((byte)(60 + i * 30));
-            Assert.False(board.Observe(panel, drifted, Length)); // it moved to get here
-            Read(board, panel, drifted, field);
+            Assert.False(board.Observe(drifted, Length)); // it moved to get here
+            Read(board, drifted, field);
         }
 
         Assert.Equal(23_975_827_939L, board.Confirmed);
@@ -338,16 +214,15 @@ public class BalanceBoardTests
     public void DriftDoesNotLetDisagreeingReadingsConfirm()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
 
         for (var i = 0; i < 9; i++)
         {
             var drifted = Picture((byte)(20 + i * 20));
-            board.Observe(panel, drifted, Length);
-            if (board.Observe(panel, drifted, Length))
+            board.Observe(drifted, Length);
+            if (board.Observe(drifted, Length))
             {
-                board.TakeRead(panel);
-                board.Ingest(panel, i % 2 == 0 ? "1,234,567" : "7,654,321");
+                board.TakeRead();
+                board.Ingest(i % 2 == 0 ? "1,234,567" : "7,654,321");
             }
         }
 
@@ -362,25 +237,24 @@ public class BalanceBoardTests
     public void ResetKeepsTheConfirmedFigureAndDropsThePendingOne()
     {
         var board = NewBoard();
-        var panel = BalanceBoard.Panel.Warehouse;
         var picture = Picture(50);
-        Settle(board, panel, picture);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, panel, picture, "1,000,000");
+        Settle(board, picture);
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "1,000,000");
 
         var other = Picture(120);
-        Assert.False(board.Observe(panel, other, Length));
-        Read(board, panel, other, "2,000,000");
-        Read(board, panel, other, "2,000,000");
+        Assert.False(board.Observe(other, Length));
+        Read(board, other, "2,000,000");
+        Read(board, other, "2,000,000");
 
         board.Reset("the game window was gone for a while");
         Assert.Equal(1_000_000L, board.Confirmed);
 
         // The two readings before the gap do not count toward the three.
-        Settle(board, panel, other);
-        Read(board, panel, other, "2,000,000");
-        Read(board, panel, other, "2,000,000");
+        Settle(board, other);
+        Read(board, other, "2,000,000");
+        Read(board, other, "2,000,000");
         Assert.Equal(1_000_000L, board.Confirmed);
-        Read(board, panel, other, "2,000,000");
+        Read(board, other, "2,000,000");
         Assert.Equal(2_000_000L, board.Confirmed);
     }
 }

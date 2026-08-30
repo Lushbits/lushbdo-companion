@@ -30,15 +30,15 @@ namespace LushbdoCompanion;
 /// frames means the game went away, and what follows one is a fresh
 /// baseline.
 ///
-/// Since #22 the same capture also carries the silver-balance rectangles,
+/// Since #22 the same capture also carries the silver-balance rectangle,
 /// cropped off the same compositor frame and handed to
 /// <see cref="BalanceBoard"/> — which gates on stillness rather than on keyed
-/// change, for the reasons on that class. They ride this watcher rather than a
+/// change, for the reasons on that class. It rides this watcher rather than a
 /// second capture session because a second session doubles the compositor's
-/// work per tick, and they share the one OCR slot rather than adding to it:
-/// the loot region asks first, and a balance is read on the ticks the chat did
-/// not need. A chat busy enough to want every pass is a chat nobody is reading
-/// their warehouse during.
+/// work per tick, and it shares the one OCR slot rather than adding to it:
+/// the loot region asks first, and the balance is read on the ticks the chat
+/// did not need. A chat busy enough to want every pass is a chat nobody is
+/// reading their market panel during.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
@@ -64,13 +64,13 @@ public sealed class LootWatcher : IDisposable
     private readonly BalanceBoard _balance;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
 
-    // The balance rectangles, as asked for and then as actually watched. They
-    // are dropped rather than watched when the recognizer cannot hold grouped
+    // The balance rectangle, as asked for and then as actually watched. It is
+    // dropped rather than watched when the recognizer cannot hold grouped
     // digits — see IOcrReader.ReadsGroupedDigits.
-    private readonly (BalanceBoard.Panel Panel, Rectangle Rect)[] _balanceRequested;
-    private BalanceBoard.Panel[] _balancePanels = [];
-    private byte[][] _balanceInput = [];   // one OCR input buffer per watched balance region
-    private TextKeyer? _balanceKeyer;      // only if the reader asked for keyed pixels
+    private readonly Rectangle? _balanceRequested;
+    private bool _watchingBalance;
+    private byte[] _balanceInput = [];   // the OCR input buffer for it
+    private TextKeyer? _balanceKeyer;    // only if the reader asked for keyed pixels
 
     private int _frameWidth;
     private int _frameHeight;
@@ -98,8 +98,7 @@ public sealed class LootWatcher : IDisposable
     private volatile bool _disposed;
 
     public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null,
-        IFrameSource? source = null, IOcrReader? reader = null,
-        IReadOnlyList<(BalanceBoard.Panel Panel, Rectangle Rect)>? balanceRegions = null)
+        IFrameSource? source = null, IOcrReader? reader = null, Rectangle? balanceRegion = null)
     {
         _region = region;
         _log = log;
@@ -108,7 +107,7 @@ public sealed class LootWatcher : IDisposable
         _reader = reader ?? new PaddleOcrReader();
         _board = new LineBoard(OnConfirmedPickup, OnBoardNote, Trace);
         _balance = new BalanceBoard(OnBoardNote, Trace);
-        _balanceRequested = balanceRegions is null ? [] : [.. balanceRegions];
+        _balanceRequested = balanceRegion;
     }
 
     /// <summary>
@@ -233,28 +232,26 @@ public sealed class LootWatcher : IDisposable
     {
         await _reader.StartAsync(_region.Width, _region.Height);
 
-        // The balance rectangles ride the same capture, but only if this
+        // The balance rectangle rides the same capture, but only if this
         // recognizer can hold a grouped number at all. On one that cannot,
         // every strict-shape check would refuse and the passes would buy
         // nothing — so say so once instead of spending them.
         var balance = _balanceRequested;
-        if (balance.Length > 0 && !_reader.ReadsGroupedDigits)
+        if (balance is not null && !_reader.ReadsGroupedDigits)
         {
-            Log($"Silver balance regions are not read by {_reader.Name} — it reads comma-grouped numbers as letters " +
-                "(0 of 1,332 read correctly in the #18 bake-off), so nothing would ever confirm. Switch off " +
-                "\"Read with Windows OCR\" to have your silver read.");
-            balance = [];
+            Log($"The silver balance region is not read by {_reader.Name} — it reads comma-grouped numbers as " +
+                "letters (0 of 1,332 read correctly in the #18 bake-off), so nothing would ever confirm. Switch " +
+                "off \"Read with Windows OCR\" to have your silver read.");
+            balance = null;
         }
-        _balancePanels = [.. balance.Select(b => b.Panel)];
-        _balanceInput = new byte[balance.Length][];
-        for (var i = 0; i < _balanceInput.Length; i++) _balanceInput[i] = [];
-        if (balance.Length > 0 && _reader.ReadsKeyed) _balanceKeyer = new TextKeyer();
+        _watchingBalance = balance is not null;
+        if (_watchingBalance && _reader.ReadsKeyed) _balanceKeyer = new TextKeyer();
 
         _source.Tick += OnTick;
         _source.Failed += OnFailed;
         _source.Status += Log;
-        // Slot 0 is the loot log; the balance rectangles follow in menu order.
-        await _source.StartAsync([_region, .. balance.Select(b => b.Rect)], FramePace);
+        // Slot 0 is the loot log; the balance rectangle is slot 1 when watched.
+        await _source.StartAsync(balance is { } rect ? [_region, rect] : [_region], FramePace);
     }
 
     private void OnTick(FrameSet? tick)
@@ -280,18 +277,16 @@ public sealed class LootWatcher : IDisposable
                 _nullTicks++;
             }
 
-            // The balance rectangles ask second, and only ever get the OCR
+            // The balance rectangle asks second, and only ever gets the OCR
             // slot the chat left alone: the loot log is what this app is for.
-            if (tick is { } crops)
-                for (var i = 0; i < _balancePanels.Length; i++)
-                    if (crops[i + 1] is { } crop) ObserveBalance(i, crop);
+            if (_watchingBalance && tick is { } crops && crops[1] is { } crop) ObserveBalance(crop);
 
             if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
                 Log(_framesCaptured == 0
                     ? "Still here — no game window captured yet."
                     : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed." +
-                      (_balancePanels.Length == 0
+                      (!_watchingBalance
                           ? ""
                           : $" Silver: {_balance.Reads} reads, {_balance.Confirmations} confirmed" +
                             (_balance.Confirmed is { } silver ? $", newest {BalanceParser.Money(silver)}." : ".")));
@@ -312,10 +307,9 @@ public sealed class LootWatcher : IDisposable
             _announced = true;
             Log($"Capture is live: {frame.Width}×{frame.Height}px region, read by {_reader.Name}" +
                 " — text keyed per frame, and read only when it changes.");
-            if (_balancePanels.Length > 0)
-                Log($"Also watching {string.Join(" and ", _balancePanels.Select(p => p.ToString().ToLowerInvariant()))} " +
-                    "for your silver balance, off the same capture — read only while a panel is open and standing " +
-                    "still, and never sent anywhere.");
+            if (_watchingBalance)
+                Log("Also watching one rectangle for your silver balance, off the same capture — read only while " +
+                    "the market panel is open and standing still, and never sent anywhere.");
             _sinceLastLogged.Restart();
         }
 
@@ -431,34 +425,33 @@ public sealed class LootWatcher : IDisposable
     /// at all. A read is only ever taken on a tick the loot log did not want,
     /// and a picture it was not free for is simply looked at again next tick.
     /// </summary>
-    private void ObserveBalance(int slot, RegionFrame crop)
+    private void ObserveBalance(RegionFrame crop)
     {
-        var panel = _balancePanels[slot];
         var length = crop.Width * crop.Height * 4;
-        if (!_balance.Observe(panel, crop.Pixels, length)) return;
+        if (!_balance.Observe(crop.Pixels, length)) return;
 
         if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) != 0)
         {
-            if (_trace is not null) Trace($"bal   {panel} wanted a read, but the loot log has the reader");
+            if (_trace is not null) Trace("bal   wanted a read, but the loot log has the reader");
             return;
         }
         var release = true;
         try
         {
-            _balance.TakeRead(panel);
+            _balance.TakeRead();
 
             // Through the same seam as the loot path: the reader states which
             // buffer it wants and is handed that one. The source reuses its
             // pixel buffer between ticks, so the copy is taken before the read
             // goes asynchronous.
-            if (_balanceInput[slot].Length != length) _balanceInput[slot] = new byte[length];
-            var input = _balanceInput[slot];
+            if (_balanceInput.Length != length) _balanceInput = new byte[length];
+            var input = _balanceInput;
             if (_balanceKeyer is { } keyer) keyer.Key(crop.Pixels, crop.Width, crop.Height, input);
             else crop.Pixels.AsSpan(0, length).CopyTo(input);
 
-            MaybeDumpBalance(panel, input, crop.Width, crop.Height);
+            MaybeDumpBalance(input, crop.Width, crop.Height);
             release = false; // RecognizeBalanceAsync owns the flag now
-            _ = RecognizeBalanceAsync(panel, input, crop.Width, crop.Height);
+            _ = RecognizeBalanceAsync(input, crop.Width, crop.Height);
         }
         finally
         {
@@ -466,7 +459,7 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
-    private async Task RecognizeBalanceAsync(BalanceBoard.Panel panel, byte[] input, int width, int height)
+    private async Task RecognizeBalanceAsync(byte[] input, int width, int height)
     {
         try
         {
@@ -482,7 +475,7 @@ public sealed class LootWatcher : IDisposable
             // one line; the strict shape is what decides whether there is a
             // number in it.
             var text = string.Join(' ', OcrRows.Merge(pieces).Select(r => r.Text));
-            _balance.Ingest(panel, text);
+            _balance.Ingest(text);
         }
         catch (Exception e)
         {
@@ -501,13 +494,13 @@ public sealed class LootWatcher : IDisposable
     /// frames are what the eval harness scores on exact match. Trace-only,
     /// capped; the crops are small enough that every read can have one.
     /// </summary>
-    private void MaybeDumpBalance(BalanceBoard.Panel panel, byte[] input, int width, int height)
+    private void MaybeDumpBalance(byte[] input, int width, int height)
     {
         if (_trace is null || _balanceDumps >= BalanceDumpCap) return;
         try
         {
             var buffer = _reader.ReadsKeyed ? "keyed" : "raw";
-            SavePng(input, width, height, $"bal{_balanceDumps:D3}-{panel.ToString().ToLowerInvariant()}-{buffer}");
+            SavePng(input, width, height, $"bal{_balanceDumps:D3}-{buffer}");
             _balanceDumps++;
         }
         catch

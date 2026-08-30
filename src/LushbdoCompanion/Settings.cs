@@ -33,11 +33,11 @@ public sealed class Settings
     /// window capture serves — because window-relative coordinates survive the
     /// game restarting or the window moving.
     ///
-    /// Only the loot log is required. The two balance rectangles (#22) are
-    /// independently optional: somebody who never opens the marketplace never
-    /// picks that one, and the app never asks for it.
+    /// Only the loot log is required. The marketplace rectangle (#22) is
+    /// optional: somebody who never wants their silver read never picks it,
+    /// and the app never asks for it.
     /// </summary>
-    public enum RegionKind { Loot, Warehouse, Marketplace }
+    public enum RegionKind { Loot, Marketplace }
 
     /// <summary>One saved rectangle, window-relative physical pixels.</summary>
     public sealed class StoredRegion
@@ -59,10 +59,14 @@ public sealed class Settings
     public int WindowRegionHeight { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public StoredRegion? WarehouseRegion { get; set; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StoredRegion? MarketplaceRegion { get; set; }
+
+    // Builds between #26 and the marketplace-only ruling had a second balance
+    // rectangle for the warehouse panel. It is read only to carry a member's
+    // aim forward into the one rectangle that remains, and is scrubbed by that
+    // — the same treatment the screen-relative region above gets.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StoredRegion? WarehouseRegion { get; set; }
 
     // Builds before window capture stored a screen-relative region under these
     // names. It cannot be translated without the game window it was picked
@@ -85,7 +89,6 @@ public sealed class Settings
         RegionKind.Loot => WindowRegionWidth > 0 && WindowRegionHeight > 0
             ? new Rectangle(WindowRegionX, WindowRegionY, WindowRegionWidth, WindowRegionHeight)
             : null,
-        RegionKind.Warehouse => ToRectangle(WarehouseRegion),
         _ => ToRectangle(MarketplaceRegion),
     };
 
@@ -107,9 +110,6 @@ public sealed class Settings
                 WindowRegionHeight = stored.Height;
                 RegionX = RegionY = RegionWidth = RegionHeight = 0; // the migration ends here
                 break;
-            case RegionKind.Warehouse:
-                WarehouseRegion = stored;
-                break;
             default:
                 MarketplaceRegion = stored;
                 break;
@@ -124,27 +124,15 @@ public sealed class Settings
             case RegionKind.Loot:
                 WindowRegionX = WindowRegionY = WindowRegionWidth = WindowRegionHeight = 0;
                 break;
-            case RegionKind.Warehouse:
-                WarehouseRegion = null;
-                break;
             default:
                 MarketplaceRegion = null;
                 break;
         }
     }
 
-    /// <summary>The balance rectangles that have actually been picked, in menu order.</summary>
+    /// <summary>The silver rectangle, if it has been picked.</summary>
     [JsonIgnore]
-    public IReadOnlyList<(RegionKind Kind, Rectangle Rect)> BalanceRegions
-    {
-        get
-        {
-            var picked = new List<(RegionKind, Rectangle)>(2);
-            foreach (var kind in new[] { RegionKind.Warehouse, RegionKind.Marketplace })
-                if (RegionFor(kind) is { } rect) picked.Add((kind, rect));
-            return picked;
-        }
-    }
+    public Rectangle? BalanceRegion => RegionFor(RegionKind.Marketplace);
 
     private static Rectangle? ToRectangle(StoredRegion? stored) =>
         stored is { Width: > 0, Height: > 0 } ? new Rectangle(stored.X, stored.Y, stored.Width, stored.Height) : null;
@@ -165,7 +153,18 @@ public sealed class Settings
                 // Rewriting now is the scrub: nothing else here saves unless the
                 // member opens Settings or switches recognizer, and a plaintext
                 // credential must not wait on that.
-                if (HasPlaintextToken(json)) settings.Save();
+                var scrub = HasPlaintextToken(json);
+                // A warehouse rectangle from an older build becomes the one
+                // remaining rectangle rather than being thrown away — the
+                // member aimed it at their balance, and re-aiming it at the
+                // market panel is a smaller ask than picking from nothing.
+                if (settings.WarehouseRegion is { } legacy)
+                {
+                    settings.MarketplaceRegion ??= legacy;
+                    settings.WarehouseRegion = null;
+                    scrub = true;
+                }
+                if (scrub) settings.Save();
                 return settings;
             }
         }

@@ -115,11 +115,19 @@ shape (which is the only syntactic guard there is against a dropped digit),
 three agreeing readings rather than the board's two, and two panels that
 disagree confirming nothing.
 
-Owner ruling (2026-08-30), closing #22's open question: **watching is all or
-nothing.** There is no silver-only mode and no per-region toggle — one capture
-session serves every rectangle and it is aimed at the loot log. Removing a
-region is how you stop watching it, which is why every region, the loot log
-included, has its own Forget in the tray's `Watched regions` menu.
+Two owner rulings closed #22's open questions on 2026-08-30. **Watching is all
+or nothing** — no silver-only mode, no per-region toggle; one capture serves
+every rectangle and it is aimed at the loot log, and removing a region is how
+you stop watching it, which is why every region including the loot log has its
+own Forget in the tray's `Watched regions` menu. And **one balance rectangle,
+on the Central Market panel**, not two. The two-rectangle cross-check was the
+only thing that could see an occluded read, and it was dropped knowingly: the
+warehouse panel's Withdraw hover overlay covers the last digit group (field,
+16:02 — `23,975,827` for `23,975,827,939`, three times), the market panel has
+nothing that hovers over its figure, and removing the failure at its source
+beat detecting it afterwards. The cost is that occlusion now has no guard at
+all, which is why the ruling names a panel rather than letting the rectangle go
+anywhere.
 
 `src/LushbdoCompanion.Eval` is the offline harness #18 was opened for: it
 replays trace-corpus snapshots through preprocessing variants and both
