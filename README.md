@@ -126,9 +126,11 @@ because a second capture session would double what the compositor does per
 tick.
 
 **Watched regions** lists all three with the size and position each is set to,
-or `not picked yet`. Clicking one picks it again; **Forget warehouse silver**
-and **Forget marketplace silver** drop one without disturbing the other, which
-is what you want when one rectangle is aimed wrong and the other is not.
+or `not picked yet`. Clicking one picks it again, and each has its own
+**Forget**, so a rectangle that is aimed wrong can be dropped without
+disturbing one that is not. Forgetting the loot log is allowed too — watching
+then stops until you pick one again, because the single capture is aimed at
+it.
 
 **Nothing is sent.** This step reads the figure and writes it to the log;
 feeding it to the site is separate work. Three things the log tells apart:

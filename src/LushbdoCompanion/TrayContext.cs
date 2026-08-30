@@ -68,10 +68,6 @@ public sealed class TrayContext : ApplicationContext
         regions.DropDownItems.Add(new ToolStripSeparator());
         foreach (var kind in RegionKinds)
         {
-            // Forgetting the loot log would just disable the app; the two
-            // optional rectangles are the ones worth being able to drop, and
-            // dropping a badly aimed one stops it spending passes on scenery.
-            if (kind == Settings.RegionKind.Loot) continue;
             var item = new ToolStripMenuItem($"Forget {RegionName(kind).ToLowerInvariant()}", null,
                 async (_, _) => await ForgetRegionAsync(kind));
             _forgetItems[kind] = item;
@@ -307,9 +303,15 @@ public sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// Drop one rectangle. Worth having per-region rather than all-or-nothing:
-    /// a badly aimed one spends passes on scenery every time it goes still,
-    /// and the answer to that should not be re-picking the one that works.
+    /// Drop one rectangle, any of the three. Per-region rather than
+    /// all-or-nothing because a badly aimed one spends passes on scenery every
+    /// time it goes still, and the answer to that should not be re-picking the
+    /// one that works.
+    ///
+    /// The loot log is droppable too. Withholding it would have been the app
+    /// deciding what a member is allowed to change about their own setup, and
+    /// the consequence — watching stops until one is picked again — is theirs
+    /// to weigh and is said plainly rather than prevented.
     /// </summary>
     private async Task ForgetRegionAsync(Settings.RegionKind kind)
     {
@@ -324,6 +326,16 @@ public sealed class TrayContext : ApplicationContext
         _settings.Save();
         RefreshRegionMenu();
         _log.Append($"Region · {RegionName(kind)} forgotten — it is no longer read.");
+
+        if (kind == Settings.RegionKind.Loot)
+        {
+            // One capture session serves every rectangle and it is aimed at
+            // the loot log, so silver cannot be watched on its own yet — #22's
+            // own open question, and the answer to it is not this menu.
+            _log.Append("Watching is off until a loot log region is picked again — one capture serves every " +
+                        "rectangle, and it starts from the loot log.");
+            return;
+        }
         if (wasWatching) await StartWatchingAsync();
     }
 
