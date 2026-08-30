@@ -2,7 +2,8 @@ namespace LushbdoCompanion;
 
 /// <summary>
 /// The pipe from the board to the site. Confirmed pickups pool here and leave
-/// as a batch every few seconds: one batch in flight at a time, its id minted
+/// as a batch as soon as the drops stop arriving: one batch in flight at a
+/// time, its id minted
 /// client-side at packaging so the server's idempotency ring makes redelivery
 /// safe. `applied:false, reason:"no-session"` is not an error — the batch is
 /// held and re-posted quietly until a gather session runs. An unreachable
@@ -12,6 +13,21 @@ namespace LushbdoCompanion;
 /// </summary>
 public sealed class LootSender : IDisposable
 {
+    /// <summary>How often the loop looks at the pool. Cheap: it usually finds nothing.</summary>
+    private static readonly TimeSpan PollPace = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Quiet time after the last confirmed pickup before the pool ships. A
+    /// gulp of loot lands as several pickups a few hundred ms apart and should
+    /// still travel as one batch, but a lone drop should not wait on a timer
+    /// for a burst that is not coming — the member is watching the site for it.
+    /// </summary>
+    private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>
+    /// The ceiling on that wait. Loot that never stops arriving would otherwise
+    /// never find a quiet moment, and the pool would grow instead of shipping.
+    /// </summary>
     private static readonly TimeSpan MintPace = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan NoSessionRetry = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan BackoffFloor = TimeSpan.FromSeconds(5);
@@ -31,6 +47,8 @@ public sealed class LootSender : IDisposable
     private TimeSpan _backoff = BackoffFloor;
     private Flow _flow = Flow.Flowing;
     private DateTime _lastHoldNote = DateTime.MinValue;
+    private DateTime _lastAdd = DateTime.MinValue;
+    private DateTime _pooledSince = DateTime.MinValue;
     private long _sentLines;
 
     /// <summary>The site said 401 — the token is revoked. Raised once, from a worker thread.</summary>
@@ -50,6 +68,9 @@ public sealed class LootSender : IDisposable
     {
         lock (_gate)
         {
+            var now = DateTime.UtcNow;
+            _lastAdd = now;
+            if (_pending.Count == 0) _pooledSince = now;
             for (var i = 0; i < _pending.Count; i++)
             {
                 if (!string.Equals(_pending[i].Name, name, StringComparison.Ordinal)) continue;
@@ -62,7 +83,7 @@ public sealed class LootSender : IDisposable
 
     private async Task RunAsync()
     {
-        using var timer = new PeriodicTimer(MintPace);
+        using var timer = new PeriodicTimer(PollPace);
         try
         {
             while (await timer.WaitForNextTickAsync(_stop.Token))
@@ -70,7 +91,13 @@ public sealed class LootSender : IDisposable
                 IngestClient.Batch? batch;
                 lock (_gate)
                 {
-                    if (_inFlight is null && _pending.Count > 0)
+                    // Ship when the drops have stopped, or when they have been
+                    // going long enough that waiting for quiet is waiting
+                    // forever.
+                    var now = DateTime.UtcNow;
+                    var settled = now - _lastAdd >= CoalesceWindow;
+                    var waitedLongEnough = now - _pooledSince >= MintPace;
+                    if (_inFlight is null && _pending.Count > 0 && (settled || waitedLongEnough))
                     {
                         _inFlight = new IngestClient.Batch($"companion-{Guid.NewGuid():N}", [.. _pending]);
                         _pending.Clear();

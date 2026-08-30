@@ -19,6 +19,14 @@ public sealed class Settings
     /// <summary>Opt-in OCR diagnostics: raw per-pass lines and board decisions, written next to this file.</summary>
     public bool TraceOcr { get; set; }
 
+    /// <summary>
+    /// Read with the OS recognizer instead of PaddleOCR. PaddleOCR reads
+    /// nearly twice as many field rows (#18) and is the default; this is the
+    /// way back for a machine where it costs too much CPU, and the fallback if
+    /// its models ever fail to unpack.
+    /// </summary>
+    public bool UseWindowsOcr { get; set; }
+
     // The loot-chat rectangle from the region picker, in physical pixels
     // relative to the game window's visible top-left — the surface window
     // capture serves. Window-relative on purpose: it survives the game

@@ -16,7 +16,7 @@
          share one physical-pixel space; the crop copies pixels by pointer. -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>0.4.1</Version>
+    <Version>0.5.0</Version>
     <AssemblyTitle>Lushbdo Companion</AssemblyTitle>
     <Product>Lushbdo Companion</Product>
     <!-- Self-contained single file keeps "download the app" one .exe: the
@@ -35,6 +35,36 @@
   <ItemGroup>
     <!-- DPAPI, so the paired token is not plaintext on disk. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- PaddleOCR PP-OCRv5 through ONNX Runtime: the recognizer #18's bake-off
+         picked, at nearly twice Windows.Media.Ocr's rows-read on the field
+         corpus. Brings ONNX Runtime and SkiaSharp natives, which ride inside
+         the exe via IncludeNativeLibrariesForSelfExtract above. -->
+    <PackageReference Include="RapidOcrNet" Version="4.0.2" />
   </ItemGroup>
+
+  <!-- The four model files travel as embedded resources and are unpacked to
+       %LOCALAPPDATA% on first run (see OcrModels): the release is one .exe and
+       a loose models\ folder beside it would be an install. @(Models) is the
+       item RapidOcrNet's own targets declare over its package folder. -->
+  <Target Name="EmbedOcrModels" BeforeTargets="PrepareForBuild">
+    <ItemGroup>
+      <EmbeddedResource Include="@(Models)" LogicalName="LushbdoCompanion.models.%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- ...which also means undoing the copy those targets make, or the publish
+       folder ships them twice and the one-file promise is gone. -->
+  <Target Name="DropLooseOcrModels" AfterTargets="CopyModelsPublish">
+    <RemoveDir Directories="$(PublishDir)models" />
+  </Target>
+
+  <!-- ONNX Runtime ships its import libraries alongside the DLL. They are for
+       linking C++, nothing loads them at runtime, and they are the only thing
+       left in the publish folder that is not the exe. -->
+  <Target Name="DropNativeImportLibs" BeforeTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.lib'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

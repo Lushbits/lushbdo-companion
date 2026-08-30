@@ -53,6 +53,9 @@ public static class LootParser
 
     private const string Verb = "You have obtained";
 
+    /// <summary>How much chat-tag furniture may sit in front of the verb. "System" and a space is six.</summary>
+    private const int MaxTagPrefix = 20;
+
     // The x in `xN` is the least reliable glyph on the line (`x23` / `*23` /
     // `x"` all observed); the digits mostly hold. Accept the misread marks,
     // never a bare number — context decides those (see QuantityTail use).
@@ -85,8 +88,18 @@ public static class LootParser
         var text = Normalize(line);
         if (text.Length == 0) return new Reading(Kind.Unrecognized, "", 0);
 
-        if (text.StartsWith(Verb, StringComparison.OrdinalIgnoreCase))
-            return ParseObtainLine(text[Verb.Length..]);
+        // The chat draws its channel in a rounded box left of the message
+        // ("System"). Keying used to swallow it; a scene-text reader reads it,
+        // sometimes as its own fragment and sometimes run into the verb
+        // ("System You have obtained[Rough Stone]"). It is furniture either
+        // way — the same class of thing as the icon token this parser already
+        // steps over between the verb and the bracket. Bounded, so it can only
+        // ever skip a tag: a short prefix, no brackets in it, and the verb
+        // still has to be there in full.
+        var verbAt = text.IndexOf(Verb, StringComparison.OrdinalIgnoreCase);
+        var tagOnly = verbAt > 0 && verbAt <= MaxTagPrefix && text.AsSpan(0, verbAt).IndexOfAny('[', ']') < 0;
+        if (verbAt == 0 || tagOnly)
+            return ParseObtainLine(text[(verbAt + Verb.Length)..]);
 
         // Not an obtain line. A wrapped tail is only ever *consumed* when the
         // line above is waiting for it — classified here, decided in context,
@@ -110,6 +123,46 @@ public static class LootParser
         }
 
         return new Reading(Kind.Unrecognized, "", 0);
+    }
+
+    /// <summary>
+    /// What two readings of the same physical row have to agree on for the
+    /// board to call them one line. The text itself cannot be that any more.
+    /// A scene-text recognizer re-detects the row on every frame, so the
+    /// furniture around the message comes and goes: the same row read
+    /// `obtained / [Wolf Blood] x22. (22:17)` on 21 passes and
+    /// `obtained  [Wolf Blood] x22. (22:17)` on 19 of them (field trace,
+    /// 2026-08-24 22:12), the icon landing as a slash or as nothing. Keyed on
+    /// raw text those are two different lines: the scroll vote finds nothing
+    /// to match, three such passes declare the board lost, and realigning
+    /// writes a screenful of real pickups off as already counted.
+    ///
+    /// So the key is the line with exactly its furniture taken out — the
+    /// chat's channel box and the item's icon, the two things this parser
+    /// already steps over — and its whitespace collapsed. Nothing else is
+    /// loosened: the name, the count and the timestamp still have to match
+    /// character for character, so two genuinely different rows can never key
+    /// alike. The timestamp stays what it has always been here, shape rather
+    /// than data — it tells rows apart and is never read as a clock.
+    /// </summary>
+    public static string IdentityKey(string line)
+    {
+        var text = Normalize(line);
+        if (text.Length == 0) return "";
+
+        var verbAt = text.IndexOf(Verb, StringComparison.OrdinalIgnoreCase);
+        var tagOnly = verbAt > 0 && verbAt <= MaxTagPrefix && text.AsSpan(0, verbAt).IndexOfAny('[', ']') < 0;
+        if (verbAt < 0 || (verbAt != 0 && !tagOnly)) return text;
+
+        var rest = text[(verbAt + Verb.Length)..];
+        var open = rest.IndexOf('[');
+        if (open < 0) return Verb + rest;
+
+        // The same "one short token is the icon" rule ParseObtainLine applies,
+        // so there is one idea of furniture and not two.
+        var junk = rest[..open].Trim();
+        if (junk.Length > 0 && (junk.Length > 3 || junk.Contains(' '))) return Verb + rest;
+        return Verb + " " + rest[open..];
     }
 
     private static Reading ParseObtainLine(string rest)

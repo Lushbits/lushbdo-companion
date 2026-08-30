@@ -8,12 +8,18 @@ namespace LushbdoCompanion;
 ///
 /// Identity comes from position on the scroll stream: trackers follow each
 /// physical line across passes. The scroll offset between passes is measured
-/// by voting — every exact match between a pass line's text and a tracker's
-/// recorded readings votes for the shift that would explain it — which keys
-/// alignment on stable text, not pixels (#2: raw pixels fail over the
-/// transparent background, and the stabilized image ghosts for the first few
-/// ticks after a scroll, exactly when alignment matters most). Each distinct
-/// text carries one text's worth of vote no matter how many places it shows:
+/// by voting — every match between a pass line and a tracker's recorded
+/// readings votes for the shift that would explain it — which keys alignment
+/// on stable text, not pixels (#2: raw pixels fail over the transparent
+/// background). What counts as a match is <see cref="LootParser.IdentityKey"/>
+/// rather than the raw text, and that is not a convenience: a scene-text
+/// recognizer re-detects each row every frame, so the chat's channel box and
+/// the item's icon flicker in and out of the reading. On raw text the same row
+/// read `obtained / [Wolf Blood] x22` and `obtained  [Wolf Blood] x22` in one
+/// session, matched nothing, and three such passes realigned the board and
+/// wrote a screenful of real pickups off as old (field trace, 2026-08-24
+/// 22:12). Each distinct key carries one key's worth of vote no matter how
+/// many places it shows:
 /// burst loot is near-identical (same items, same counts, same minute) and
 /// its duplicate matches are periodic — unnormalized, they out-vote the few
 /// unique lines that pin the true shift. And when the full vote reads as
@@ -24,7 +30,10 @@ namespace LushbdoCompanion;
 /// Emission is gated by reading consensus: nothing is ever sent on one
 /// frame's word. A tracker emits once, when some parseable reading has
 /// recurred; misreads vary randomly between frames while the true reading
-/// repeats. Every ambiguity resolves the same direction — a visible
+/// repeats. "Recurred" is also counted by key, for the same reason and with
+/// the same stakes reversed — a row whose icon flickered could never agree
+/// with itself twice, so it settled on nothing and was skipped as never read
+/// cleanly. Every ambiguity resolves the same direction — a visible
 /// undercount, never a double count and never a guess: lines visible at
 /// start are baseline and never sent, a lost alignment resets to baseline,
 /// backwards scrolling that persists resets to baseline (one backwards vote
@@ -57,10 +66,19 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     private const int MaxReadingsPerTracker = 12;
     private const double DyBinPx = 3.0;
 
+    /// <summary>
+    /// One thing this row has been read as: the raw text as it first came, and
+    /// how many passes agreed with it. Stored under
+    /// <see cref="LootParser.IdentityKey"/> rather than under the text, so the
+    /// icon flickering between a slash and nothing is the same reading twice
+    /// and not two readings once.
+    /// </summary>
+    private readonly record struct Seen(string Text, int Count);
+
     private sealed class Tracker
     {
         public double Y;
-        public readonly Dictionary<string, int> Readings = new(StringComparer.Ordinal);
+        public readonly Dictionary<string, Seen> Readings = new(StringComparer.Ordinal);
         public int PassesUnseen;
         public bool Emitted;            // sent, consumed as a tail, skipped, or adopted as baseline
         public bool HasLootShape;       // some reading parses as loot grammar — this row is content, not furniture
@@ -69,7 +87,15 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         public bool MatchedThisPass;
     }
 
-    public readonly record struct OcrLineInput(string Text, double Y, double Height);
+    /// <summary>
+    /// A merged visual row. <paramref name="Key"/> is what identity and
+    /// consensus are decided on; <paramref name="Text"/> is what is parsed,
+    /// logged and sent.
+    /// </summary>
+    public readonly record struct OcrLineInput(string Text, double Y, double Height)
+    {
+        public string Key { get; } = LootParser.IdentityKey(Text);
+    }
 
     private readonly List<Tracker> _trackers = [];
     private readonly List<OcrLineInput> _lastLines = [];
@@ -77,7 +103,19 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     private int _nullPasses;
     private int _backwardsPasses;
     private bool _blindSpell;
-    private double _lineHeight = 18;
+
+    /// <summary>
+    /// The distance between adjacent visual rows, measured from each pass.
+    /// Every tolerance below is a fraction of *this* rather than of a box
+    /// height, because a box height is not a fixed share of a row: the OS
+    /// recognizer returns about 0.54 of the pitch and PaddleOCR's detector
+    /// about 1.08, so tolerances written against height silently doubled when
+    /// the reader changed — the match window went from a third of a row to
+    /// three quarters, and a wrapped head could pair with a tail two rows
+    /// down. The fractions here are the old ones restated against pitch, so
+    /// they are the same distances they always were.
+    /// </summary>
+    private double _rowPitch = 24;
 
     /// <summary>True while any tracked line still awaits consensus or a wrapped tail.</summary>
     public bool HasUnsettled => _trackers.Exists(t => !t.Emitted);
@@ -108,7 +146,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     private void IngestCore(List<OcrLineInput> lines, bool fresh)
     {
         if (lines.Count > 0)
-            _lineHeight = Math.Clamp(MedianHeight(lines), 8, 64);
+            _rowPitch = Math.Clamp(MedianRowPitch(lines), 8, 64);
 
         if (_baselinePending)
         {
@@ -135,7 +173,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         {
             _nullPasses = 0;
             dy = voted;
-            if (dy > _lineHeight)
+            if (dy > 0.5 * _rowPitch)
             {
                 // Content moved DOWN: the member scrolled the tab backwards —
                 // or identical burst lines stacked a row apart voted
@@ -148,7 +186,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                     trace?.Invoke($"vote  full {voted:F1} looks backwards, nothing unique to ask — holding");
                     return; // nothing unambiguous to ask — hold fire, no strike
                 }
-                if (unique > _lineHeight)
+                if (unique > 0.5 * _rowPitch)
                 {
                     // The unambiguous lines agree it moved down. Believe it
                     // when it persists — the board held still, so a real
@@ -257,7 +295,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 Emitted = true,
                 HasLootShape = LootParser.Parse(line.Text).Kind != LootParser.Kind.Unrecognized
             };
-            t.Readings[line.Text] = 1;
+            t.Readings[line.Key] = new Seen(line.Text, 1);
             _trackers.Add(t);
         }
         _baselinePending = false;
@@ -280,10 +318,10 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         {
             foreach (var t in _trackers)
             {
-                if (!t.Readings.ContainsKey(line.Text)) continue;
+                if (!t.Readings.ContainsKey(line.Key)) continue;
                 pairCounts ??= new Dictionary<string, int>(StringComparer.Ordinal);
-                pairCounts.TryGetValue(line.Text, out var n);
-                pairCounts[line.Text] = n + 1;
+                pairCounts.TryGetValue(line.Key, out var n);
+                pairCounts[line.Key] = n + 1;
             }
         }
         if (pairCounts is null) return (null, null);
@@ -294,9 +332,9 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         {
             foreach (var t in _trackers)
             {
-                if (!t.Readings.TryGetValue(line.Text, out var reads)) continue;
-                var pairs = pairCounts[line.Text];
-                var weight = (double)reads / pairs;
+                if (!t.Readings.TryGetValue(line.Key, out var seen)) continue;
+                var pairs = pairCounts[line.Key];
+                var weight = (double)seen.Count / pairs;
                 var dy = line.Y - t.Y;
                 var bin = (int)Math.Round(dy / DyBinPx);
                 bins.TryGetValue(bin, out var acc);
@@ -329,7 +367,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
 
     private void MatchAndTrack(List<OcrLineInput> lines, double bottom, int newBudget)
     {
-        var tolerance = 0.6 * _lineHeight;
+        var tolerance = 0.35 * _rowPitch;
         List<(OcrLineInput Line, bool Loot)>? unmatched = null;
         foreach (var line in lines)
         {
@@ -351,7 +389,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 nearest.MatchedThisPass = true;
                 nearest.PassesUnseen = 0;
                 nearest.Y = line.Y; // re-anchor: measured position beats accumulated shifts
-                AddReading(nearest, line.Text);
+                AddReading(nearest, line);
             }
             else
             {
@@ -369,7 +407,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             var bornOld = 0;
             foreach (var (line, loot) in unmatched)
             {
-                var inBottomZone = line.Y >= bottom - 0.5 * _lineHeight;
+                var inBottomZone = line.Y >= bottom - 0.3 * _rowPitch;
                 if (inBottomZone && newBudget <= 0)
                 {
                     // At the bottom edge but this pass's scroll does not
@@ -383,7 +421,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 if (inBottomZone) newBudget--;
                 else bornOld++;
                 var t = new Tracker { Y = line.Y, Emitted = !inBottomZone, HasLootShape = loot };
-                t.Readings[line.Text] = 1;
+                t.Readings[line.Key] = new Seen(line.Text, 1);
                 t.MatchedThisPass = true;
                 _trackers.Add(t);
             }
@@ -406,18 +444,18 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         for (var i = 1; i < lines.Count; i++)
         {
             var gap = lines[i].Y - lines[i - 1].Y;
-            if (gap >= 0.5 * _lineHeight) (gaps ??= []).Add(gap);
+            if (gap >= 0.3 * _rowPitch) (gaps ??= []).Add(gap);
         }
-        if (gaps is null) return _lineHeight;
+        if (gaps is null) return _rowPitch;
         gaps.Sort();
         return gaps[gaps.Count / 2];
     }
 
-    private static void AddReading(Tracker t, string text)
+    private static void AddReading(Tracker t, OcrLineInput line)
     {
-        if (t.Readings.TryGetValue(text, out var n))
+        if (t.Readings.TryGetValue(line.Key, out var seen))
         {
-            t.Readings[text] = n + 1;
+            t.Readings[line.Key] = seen with { Count = seen.Count + 1 };
             return;
         }
         if (t.Readings.Count >= MaxReadingsPerTracker)
@@ -426,12 +464,12 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             // that might be the recurring truth.
             string? evict = null;
             foreach (var r in t.Readings)
-                if (r.Value == 1) { evict = r.Key; break; }
+                if (r.Value.Count == 1) { evict = r.Key; break; }
             if (evict is null) return;
             t.Readings.Remove(evict);
         }
-        t.Readings[text] = 1;
-        if (!t.HasLootShape && LootParser.Parse(text).Kind != LootParser.Kind.Unrecognized)
+        t.Readings[line.Key] = new Seen(line.Text, 1);
+        if (!t.HasLootShape && LootParser.Parse(line.Text).Kind != LootParser.Kind.Unrecognized)
             t.HasLootShape = true;
     }
 
@@ -443,7 +481,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             var t = _trackers[i];
             if (!t.MatchedThisPass) t.PassesUnseen++;
 
-            var scrolledOff = t.Y < -0.5 * _lineHeight;
+            var scrolledOff = t.Y < -0.3 * _rowPitch;
             var stale = t.PassesUnseen >= StaleAfterPasses;
             if (!scrolledOff && !stale) continue;
 
@@ -494,20 +532,20 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             string? bestText = null;
             var bestCount = 0;
             LootParser.Reading bestParsed = default;
-            foreach (var r in t.Readings)
+            foreach (var (_, seen) in t.Readings)
             {
-                if (r.Value < ConsensusReads) continue;
+                if (seen.Count < ConsensusReads) continue;
                 if (t.SettledText is not null)
                 {
-                    if (r.Key.Length <= t.SettledText.Length ||
-                        !r.Key.StartsWith(t.SettledText, StringComparison.Ordinal)) continue;
-                    if (bestText is not null && r.Key.Length <= bestText.Length) continue; // longest extension wins
+                    if (seen.Text.Length <= t.SettledText.Length ||
+                        !seen.Text.StartsWith(t.SettledText, StringComparison.Ordinal)) continue;
+                    if (bestText is not null && seen.Text.Length <= bestText.Length) continue; // longest extension wins
                 }
-                else if (r.Value <= bestCount) continue;
-                var parsed = LootParser.Parse(r.Key);
+                else if (seen.Count <= bestCount) continue;
+                var parsed = LootParser.Parse(seen.Text);
                 if (parsed.Kind == LootParser.Kind.Unrecognized) continue;
-                bestText = r.Key;
-                bestCount = r.Value;
+                bestText = seen.Text;
+                bestCount = seen.Count;
                 bestParsed = parsed;
             }
             if (bestText is null) continue;
@@ -571,7 +609,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         // `x4. (18:51)` — or mid-name — `You have obtained [Deep Tide-Dyed
         // Standardized Timber` then `Square] x4. (20:25)` as the next visual
         // line. Wait for the tail to settle.
-        if (below is null || Math.Abs(below.Y - head.Y) > 1.8 * _lineHeight)
+        if (below is null || Math.Abs(below.Y - head.Y) > 1.2 * _rowPitch)
         {
             // Nothing below (yet) — the tail may still be rendering. The
             // scroll-off skip in DropDepartedTrackers is the deadline.
@@ -646,14 +684,9 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     {
         var best = "";
         var bestCount = -1;
-        foreach (var r in t.Readings)
-            if (r.Value > bestCount) { best = r.Key; bestCount = r.Value; }
+        foreach (var (_, seen) in t.Readings)
+            if (seen.Count > bestCount) { best = seen.Text; bestCount = seen.Count; }
         return best;
     }
 
-    private static double MedianHeight(List<OcrLineInput> lines)
-    {
-        var heights = lines.Select(l => l.Height).Order().ToArray();
-        return heights[heights.Length / 2];
-    }
 }
