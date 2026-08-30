@@ -68,7 +68,7 @@ public sealed class LootWatcher : IDisposable
     /// <summary>A quiet log line this often, so a silent log can only mean capture died.</summary>
     private static readonly TimeSpan HeartbeatEvery = TimeSpan.FromMinutes(2);
 
-    private readonly Rectangle _region; // window-relative physical pixels, from the region picker
+    private readonly Rectangle? _region; // window-relative physical pixels; null means silver only
     private readonly Action<string> _log;
     private readonly Action<string, int>? _onLoot;
     private readonly IFrameSource _source;
@@ -82,7 +82,8 @@ public sealed class LootWatcher : IDisposable
     // dropped rather than watched when the recognizer cannot hold grouped
     // digits — see IOcrReader.ReadsGroupedDigits.
     private readonly BalanceWatch? _balanceRequested;
-    private bool _watchingBalance;
+    private int _lootSlot = -1;      // which crop is the chat, or -1 when it is not watched
+    private int _balanceSlot = -1;   // which crop is the balance, or -1
     private byte[] _balanceInput = [];   // the OCR input buffer for it
     private TextKeyer? _balanceKeyer;    // only if the reader asked for keyed pixels
 
@@ -111,7 +112,7 @@ public sealed class LootWatcher : IDisposable
     private string _lastFailure = "";
     private volatile bool _disposed;
 
-    public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null,
+    public LootWatcher(Rectangle? region, Action<string> log, Action<string, int>? onLoot = null,
         IFrameSource? source = null, IOcrReader? reader = null, BalanceWatch? balance = null)
     {
         _region = region;
@@ -244,8 +245,6 @@ public sealed class LootWatcher : IDisposable
 
     public async Task StartAsync()
     {
-        await _reader.StartAsync(_region.Width, _region.Height);
-
         // The balance rectangle rides the same capture, but only if this
         // recognizer can hold a grouped number at all. On one that cannot,
         // every strict-shape check would refuse and the passes would buy
@@ -258,14 +257,26 @@ public sealed class LootWatcher : IDisposable
                 "off \"Read with Windows OCR\" to have your silver read.");
             balance = null;
         }
-        _watchingBalance = balance is not null;
-        if (_watchingBalance && _reader.ReadsKeyed) _balanceKeyer = new TextKeyer();
+        if (_region is null && balance is null)
+            throw new InvalidOperationException("there is nothing to watch — no region is picked.");
+
+        // Whichever rectangle exists sizes the reader's preparation; on the
+        // OS recognizer that is a bounds check, and it wants a real one.
+        var sizing = _region ?? balance!.Value.Region;
+        await _reader.StartAsync(sizing.Width, sizing.Height);
+        if (balance is not null && _reader.ReadsKeyed) _balanceKeyer = new TextKeyer();
+
+        // The slots are worked out rather than assumed, because the loot log is
+        // no longer always present: in silver-only the balance rectangle is the
+        // only crop and so it is slot 0.
+        var regions = new List<Rectangle>(2);
+        if (_region is { } loot) { _lootSlot = regions.Count; regions.Add(loot); }
+        if (balance is { } watch) { _balanceSlot = regions.Count; regions.Add(watch.Region); }
 
         _source.Tick += OnTick;
         _source.Failed += OnFailed;
         _source.Status += Log;
-        // Slot 0 is the loot log; the balance rectangle is slot 1 when watched.
-        await _source.StartAsync(balance is { } watch ? [_region, watch.Region] : [_region], FramePace);
+        await _source.StartAsync(regions, FramePace);
     }
 
     private void OnTick(FrameSet? tick)
@@ -273,7 +284,12 @@ public sealed class LootWatcher : IDisposable
         try
         {
             if (_disposed) return;
-            if (tick is { } set && set[0] is { } frame)
+
+            if (tick is null)
+            {
+                _nullTicks++;
+            }
+            else
             {
                 if (_nullTicks >= FrameGapTicks && _framesCaptured > 0)
                 {
@@ -284,26 +300,39 @@ public sealed class LootWatcher : IDisposable
                     _balance.Reset("the game window was gone for a while");
                 }
                 _nullTicks = 0;
-                ReadFrame(frame);
-            }
-            else
-            {
-                _nullTicks++;
             }
 
-            // The balance rectangle asks second, and only ever gets the OCR
-            // slot the chat left alone: the loot log is what this app is for.
-            if (_watchingBalance && tick is { } crops && crops[1] is { } crop) ObserveBalance(crop);
+            if (tick is { } set)
+            {
+                var loot = _lootSlot >= 0 ? set[_lootSlot] : null;
+                var crop = _balanceSlot >= 0 ? set[_balanceSlot] : null;
+
+                // The announce and the frame count belong to the tick rather
+                // than to the loot read, because in silver-only there is no
+                // loot read and the log would otherwise insist forever that no
+                // game window had been captured.
+                if (loot is { } shown) Announce(shown.Width, shown.Height);
+                else if (crop is { } only) Announce(only.Width, only.Height);
+                if (loot is not null || crop is not null) _framesCaptured++;
+
+                if (loot is { } frame) ReadFrame(frame);
+                // The balance asks second and only ever gets the OCR slot the
+                // chat left alone — except in silver-only, where there is no
+                // chat and every slot is its own.
+                if (crop is { } pixels) ObserveBalance(pixels);
+            }
 
             if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
+                var silver = _balanceSlot < 0
+                    ? ""
+                    : $" Silver: {_balance.Reads} reads, {_balance.Confirmations} confirmed" +
+                      (_balance.Confirmed is { } newest ? $", newest {BalanceParser.Money(newest)}." : ".");
                 Log(_framesCaptured == 0
                     ? "Still here — no game window captured yet."
-                    : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed." +
-                      (!_watchingBalance
-                          ? ""
-                          : $" Silver: {_balance.Reads} reads, {_balance.Confirmations} confirmed" +
-                            (_balance.Confirmed is { } silver ? $", newest {BalanceParser.Money(silver)}." : ".")));
+                    : _lootSlot < 0
+                        ? $"Still watching the silver balance only — {_framesCaptured} frames.{silver}"
+                        : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed.{silver}");
                 _sinceLastLogged.Restart();
             }
         }
@@ -313,20 +342,26 @@ public sealed class LootWatcher : IDisposable
         }
     }
 
+    /// <summary>Said once, and it has to say which of the two things is happening.</summary>
+    private void Announce(int width, int height)
+    {
+        if (_announced) return;
+        _announced = true;
+        if (_lootSlot >= 0)
+            Log($"Capture is live: {width}×{height}px region, read by {_reader.Name}" +
+                " — text keyed per frame, and read only when it changes.");
+        if (_balanceSlot >= 0)
+            Log(_lootSlot >= 0
+                ? "Also watching one rectangle for your silver balance, off the same capture — read only while " +
+                  "the market panel is open and standing still."
+                : $"Capture is live, silver only: one {width}×{height}px rectangle read by {_reader.Name}, and " +
+                  "only while the market panel is open and standing still. The loot log is not being watched, so " +
+                  "nothing is keyed and no chat pass ever runs.");
+        _sinceLastLogged.Restart();
+    }
+
     private void ReadFrame(RegionFrame frame)
     {
-        _framesCaptured++;
-        if (!_announced)
-        {
-            _announced = true;
-            Log($"Capture is live: {frame.Width}×{frame.Height}px region, read by {_reader.Name}" +
-                " — text keyed per frame, and read only when it changes.");
-            if (_watchingBalance)
-                Log("Also watching one rectangle for your silver balance, off the same capture — read only while " +
-                    "the market panel is open and standing still.");
-            _sinceLastLogged.Restart();
-        }
-
         if (frame.Width != _frameWidth || frame.Height != _frameHeight)
         {
             _frameWidth = frame.Width;

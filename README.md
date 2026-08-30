@@ -132,8 +132,23 @@ recognizer has room, and buttons and counters outside.
 
 It rides the same **Start watching** toggle and the same capture as the loot
 log, because a second capture session would double what the compositor does per
-tick. **Watching is all or nothing**: there is no silver-only mode and no
-per-region switch. To stop watching something, remove its region.
+tick.
+
+### Watch silver only
+
+If the app costs more CPU than you want — on a laptop especially — tick **Watch
+silver only** in the tray. It skips the loot log entirely: nothing is keyed, no
+chat pass ever runs, and the app costs one sampled diff over a small crop per
+tick plus a short read in the seconds a market panel is actually open.
+
+That is where nearly all the cost is. Watching the loot log keys every captured
+frame — a filter over the whole chat rectangle, twice a second, whatever the
+chat is doing — and runs a ~340 ms recogniser pass on a good fraction of ticks.
+The silver rectangle does neither.
+
+Your loot rectangle is kept, so switching back is one click rather than another
+pick. The log says which mode is live when watching starts, so there is no
+guessing.
 
 **Watched regions** lists both rectangles with the size and position each is
 set to, or `not picked yet`. Clicking one picks it again, and each has its own
@@ -183,6 +198,8 @@ border around the game window is unavoidable there, same as with OBS.
 - OCR reads the median-stabilized image at half the capture pace, and only
   when that image actually changed — a still scene costs a few milliseconds
   of arithmetic per tick and no OCR at all.
+- **Watch silver only** turns the expensive half off entirely — see above. It
+  is the setting to reach for when the app costs more than you want.
 - The silver rectangle is gated the opposite way round, on **stillness**:
   two consecutive frames near-identical means a panel is up and worth a look,
   anything else is the moving world and is dropped before any reading. With no

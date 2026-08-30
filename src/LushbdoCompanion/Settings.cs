@@ -20,6 +20,19 @@ public sealed class Settings
     public bool TraceOcr { get; set; }
 
     /// <summary>
+    /// Watch the silver rectangle and nothing else. The loot log is what costs
+    /// CPU — it keys every captured frame and reads the chat on a good fraction
+    /// of ticks — and a member who only wants their silver on the site should
+    /// not pay for it. Field report: 16% on a laptop with the loot log on.
+    ///
+    /// This reverses the all-or-nothing ruling of 2026-08-30 morning, which was
+    /// made when a silver-only mode had a cost and no benefit. The benefit
+    /// arrived the same afternoon. It stays a mode rather than "drop the loot
+    /// rectangle" so that switching back does not mean picking it again.
+    /// </summary>
+    public bool SilverOnly { get; set; }
+
+    /// <summary>
     /// Read with the OS recognizer instead of PaddleOCR. PaddleOCR reads
     /// nearly twice as many field rows (#18) and is the default; this is the
     /// way back for a machine where it costs too much CPU, and the fallback if

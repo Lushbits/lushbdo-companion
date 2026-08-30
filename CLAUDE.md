@@ -124,11 +124,17 @@ shape (which is the only syntactic guard there is against a dropped digit),
 three agreeing readings rather than the board's two, and two panels that
 disagree confirming nothing.
 
-Two owner rulings closed #22's open questions on 2026-08-30. **Watching is all
-or nothing** — no silver-only mode, no per-region toggle; one capture serves
-every rectangle and it is aimed at the loot log, and removing a region is how
-you stop watching it, which is why every region including the loot log has its
-own Forget in the tray's `Watched regions` menu. And **one balance rectangle,
+Two owner rulings closed #22's open questions on 2026-08-30, and one of them
+was then overturned the same afternoon by a field report — a laptop at 16% CPU.
+**Watching was all or nothing**; it is now a `SilverOnly` mode, because the
+loot log is where essentially all the cost is (it keys every captured frame and
+reads the chat on a good fraction of ticks) and a member who only wants their
+silver on the site should not pay for it. The ruling was right when it was made
+and wrong once there was a benefit on the other side of it; the mode keeps the
+loot rectangle saved so switching back is a click rather than a re-pick. What
+survives from that morning is the rest: one capture serves every rectangle, and
+removing a region is still how you stop watching it, which is why every region
+including the loot log has its own Forget in the tray's `Watched regions` menu. And **one balance rectangle,
 on the Central Market panel**, not two. The two-rectangle cross-check was the
 only thing that could see an occluded read, and it was dropped knowingly: the
 warehouse panel's Withdraw hover overlay covers the last digit group (field,
