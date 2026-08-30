@@ -119,9 +119,16 @@ now*, so with the panel closed there is nothing to drag a rectangle around. If
 the game closed the panel when you tabbed away, press Esc and the app offers to
 pick on the live screen after a three-second countdown instead.
 
-Drag it around the digits with a little room to spare — the recognizer needs
-some margin to find the text at all — and **keep buttons out of the rectangle**,
-for the reason above.
+**Include the words `Warehouse Balance` in the rectangle, along with the figure
+and nothing else.** The label is what tells the app that the number is your
+balance rather than any number the interface happened to draw in that spot — an
+item tooltip's `Market Price: 69,000,000,000 Silver` is a perfectly well-formed
+number, and without the label it would be recorded as your silver. If the crop
+comes back with the label missing, or with text in it besides the label and the
+figure, the app refuses it and says so: something is drawn over the rectangle.
+
+So: label and figure inside, a few pixels of margin around them so the
+recognizer has room, and buttons and counters outside.
 
 It rides the same **Start watching** toggle and the same capture as the loot
 log, because a second capture session would double what the compositor does per

@@ -61,11 +61,11 @@ public class BalanceBoardTests
         var picture = Picture(50);
         Settle(board, picture);
 
-        Read(board, picture, "Silver 1,234,567");
+        Read(board, picture, "Warehouse Balance 1,234,567");
         Assert.Null(board.Confirmed);
-        Read(board, picture, "Silver 1,234,567");
+        Read(board, picture, "Warehouse Balance 1,234,567");
         Assert.Null(board.Confirmed);
-        Read(board, picture, "Silver 1,234,567");
+        Read(board, picture, "Warehouse Balance 1,234,567");
 
         Assert.Equal(1234567L, board.Confirmed);
         Assert.Contains(_notes, n => n.Contains("confirmed 1,234,567"));
@@ -83,7 +83,7 @@ public class BalanceBoardTests
         Settle(board, picture);
 
         for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++)
-            Read(board, picture, i % 2 == 0 ? "1,234,567" : "7,654,321");
+            Read(board, picture, i % 2 == 0 ? "Warehouse Balance 1,234,567" : "Warehouse Balance 7,654,321");
 
         Assert.Null(board.Confirmed);
         Assert.Contains(_notes, n => n.Contains("without 3 agreeing readings"));
@@ -98,7 +98,7 @@ public class BalanceBoardTests
         Settle(board, picture);
 
         for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++)
-            Read(board, picture, "Silver 1,00");
+            Read(board, picture, "Warehouse Balance 1,00");
 
         Assert.Null(board.Confirmed);
         Assert.Single(_notes);
@@ -116,20 +116,20 @@ public class BalanceBoardTests
         var board = NewBoard();
         var picture = Picture(50);
         Settle(board, picture);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "1,000,000");
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "Warehouse Balance 1,000,000");
         Assert.Single(_notes);
 
         // The panel drifts and re-confirms shortly after: still quiet.
         var drifted = Picture(120);
         board.Observe(drifted, Length);
-        Read(board, drifted, "1,000,000");
+        Read(board, drifted, "Warehouse Balance 1,000,000");
         Assert.Single(_notes);
 
         // Once the repeat window has passed, it says it is still reading it.
         for (var i = 0; i < BalanceBoard.RepeatNoteTicks; i++) board.Observe(drifted, Length);
         var again = Picture(200);
         board.Observe(again, Length);
-        Read(board, again, "1,000,000");
+        Read(board, again, "Warehouse Balance 1,000,000");
 
         Assert.Equal(2, _notes.Count);
         Assert.Contains("still reading 1,000,000", _notes[1]);
@@ -145,7 +145,7 @@ public class BalanceBoardTests
         var board = NewBoard();
         var picture = Picture(50);
         Settle(board, picture);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "1,000,000");
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "Warehouse Balance 1,000,000");
 
         var before = board.Reads;
         for (var i = 0; i < 20; i++) Assert.False(board.Observe(picture, Length));
@@ -159,11 +159,11 @@ public class BalanceBoardTests
         var board = NewBoard();
         var first = Picture(50);
         Settle(board, first);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, first, "1,000,000");
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, first, "Warehouse Balance 1,000,000");
 
         var second = Picture(120);
         Assert.False(board.Observe(second, Length)); // it moved to get here
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, second, "2,000,000");
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, second, "Warehouse Balance 2,000,000");
 
         Assert.Equal(2_000_000L, board.Confirmed);
     }
@@ -179,7 +179,7 @@ public class BalanceBoardTests
         var picture = Picture(50);
         Settle(board, picture);
 
-        for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++) Read(board, picture, "no digits here");
+        for (var i = 0; i < BalanceBoard.ReadsPerPicture; i++) Read(board, picture, "nothing here at all");
         for (var i = 0; i < 50; i++) Assert.False(board.Observe(picture, Length));
         Assert.Equal(BalanceBoard.ReadsPerPicture, board.Reads);
     }
@@ -222,7 +222,7 @@ public class BalanceBoardTests
             if (board.Observe(drifted, Length))
             {
                 board.TakeRead();
-                board.Ingest(i % 2 == 0 ? "1,234,567" : "7,654,321");
+                board.Ingest(i % 2 == 0 ? "Warehouse Balance 1,234,567" : "Warehouse Balance 7,654,321");
             }
         }
 
@@ -239,22 +239,22 @@ public class BalanceBoardTests
         var board = NewBoard();
         var picture = Picture(50);
         Settle(board, picture);
-        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "1,000,000");
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++) Read(board, picture, "Warehouse Balance 1,000,000");
 
         var other = Picture(120);
         Assert.False(board.Observe(other, Length));
-        Read(board, other, "2,000,000");
-        Read(board, other, "2,000,000");
+        Read(board, other, "Warehouse Balance 2,000,000");
+        Read(board, other, "Warehouse Balance 2,000,000");
 
         board.Reset("the game window was gone for a while");
         Assert.Equal(1_000_000L, board.Confirmed);
 
         // The two readings before the gap do not count toward the three.
         Settle(board, other);
-        Read(board, other, "2,000,000");
-        Read(board, other, "2,000,000");
+        Read(board, other, "Warehouse Balance 2,000,000");
+        Read(board, other, "Warehouse Balance 2,000,000");
         Assert.Equal(1_000_000L, board.Confirmed);
-        Read(board, other, "2,000,000");
+        Read(board, other, "Warehouse Balance 2,000,000");
         Assert.Equal(2_000_000L, board.Confirmed);
     }
 }

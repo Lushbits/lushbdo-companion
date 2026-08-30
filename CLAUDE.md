@@ -143,6 +143,15 @@ Dust` came back as `Ancient. Spirit. Oust` 1160 times in one session and
 correctly zero times — which is why more frames and more voting could not
 close it.
 
+A balance crop must carry its own identity, the way a loot line does. The shape
+says a number is well formed; it cannot say the number is *the balance*, and
+every field failure was something else getting into the rectangle — a UI
+counter, a button's hover overlay eating the last digit group, an item tooltip
+whose `Market Price: 69,000,000,000 Silver` parses as cleanly as the real
+figure. So `BalanceParser` demands the label, one number, and nothing else,
+exactly as `LootParser` demands the verb and a closed bracket pair. Across every
+field corpus that took `wrong` to zero without costing a single correct read.
+
 Two things the balance crops taught that no amount of desk reasoning would
 have: PaddleOCR's scan border is **not optional on a tight crop** — with
 `Padding = 0`, the recipe the chat region uses, it read a warehouse balance 0
