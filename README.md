@@ -47,7 +47,7 @@ Set the game up once:
   requirement.
 - English client (v1 reads English only).
 
-Then, from the tray icon: **Pick loot log region…**. The app finds the game's
+Then, from the tray icon: **Watched regions → Loot log**. The app finds the game's
 window, photographs one frame of it, and shows that still full-screen — drag a
 rectangle around the chat tab's text on it, Esc cancels. Start the rectangle
 just right of the `System` chip column — every loot line begins "You have
@@ -103,8 +103,8 @@ Optional, and off until you pick a rectangle for it. The warehouse figure and
 the market figure are **one number shown in two places**, never two to add —
 either reading is the whole answer.
 
-**Open the panel in-game first**, then from the tray icon: **Watch silver
-balance → Pick warehouse region…** (or marketplace). The picker photographs the
+**Open the panel in-game first**, then from the tray icon: **Watched regions →
+Warehouse silver** (or marketplace). The picker photographs the
 game as it is *right now*, so with the panel closed there is nothing to drag a
 rectangle around. If the game closed the panel when you tabbed away, press Esc
 and the app offers to pick on the live screen after a three-second countdown
@@ -123,7 +123,12 @@ counter inside the rectangle can and does spoil the read.
 Both rectangles are independently optional — pick neither, one, or both. They
 ride the same **Start watching** toggle and the same capture as the loot log,
 because a second capture session would double what the compositor does per
-tick. **Watch silver balance → Forget both** drops them again.
+tick.
+
+**Watched regions** lists all three with the size and position each is set to,
+or `not picked yet`. Clicking one picks it again; **Forget warehouse silver**
+and **Forget marketplace silver** drop one without disturbing the other, which
+is what you want when one rectangle is aimed wrong and the other is not.
 
 **Nothing is sent.** This step reads the figure and writes it to the log;
 feeding it to the site is separate work. Three things the log tells apart:

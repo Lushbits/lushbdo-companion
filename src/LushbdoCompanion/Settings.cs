@@ -116,8 +116,22 @@ public sealed class Settings
         }
     }
 
-    /// <summary>Drop both balance rectangles — the way out of a badly aimed one.</summary>
-    public void ForgetBalanceRegions() => WarehouseRegion = MarketplaceRegion = null;
+    /// <summary>Drop one rectangle — the way out of a badly aimed one.</summary>
+    public void ForgetRegion(RegionKind kind)
+    {
+        switch (kind)
+        {
+            case RegionKind.Loot:
+                WindowRegionX = WindowRegionY = WindowRegionWidth = WindowRegionHeight = 0;
+                break;
+            case RegionKind.Warehouse:
+                WarehouseRegion = null;
+                break;
+            default:
+                MarketplaceRegion = null;
+                break;
+        }
+    }
 
     /// <summary>The balance rectangles that have actually been picked, in menu order.</summary>
     [JsonIgnore]

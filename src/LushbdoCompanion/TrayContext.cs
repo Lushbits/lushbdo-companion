@@ -17,6 +17,13 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _watchItem;
     private readonly ToolStripMenuItem _traceItem;
     private readonly ToolStripMenuItem _windowsOcrItem;
+
+    // All three rectangles live in one submenu and each says what it is set
+    // to, because "which of these did I actually pick, and where?" was a
+    // question the menu could not answer and the log could only answer at
+    // startup.
+    private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _regionItems = [];
+    private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _forgetItems = [];
     private LootWatcher? _watcher;
     private LootSender? _sender;
     private bool _updateBalloonShown;
@@ -41,21 +48,39 @@ public sealed class TrayContext : ApplicationContext
             Checked = _settings.UseWindowsOcr
         };
 
-        // The two balance rectangles sit in a submenu: they are optional, one
-        // capture serves all three, and a member who never opens the warehouse
-        // should not be nagged for them (#22).
-        var silver = new ToolStripMenuItem("Watch silver balance");
-        silver.DropDownItems.Add("Pick warehouse region…", null,
-            async (_, _) => await PickRegionAsync(Settings.RegionKind.Warehouse));
-        silver.DropDownItems.Add("Pick marketplace region…", null,
-            async (_, _) => await PickRegionAsync(Settings.RegionKind.Marketplace));
-        silver.DropDownItems.Add(new ToolStripSeparator());
-        silver.DropDownItems.Add("Forget both", null, async (_, _) => await ForgetBalanceRegionsAsync());
+        // One place for every rectangle, each showing what it is set to. The
+        // loot log is the one the app cannot work without; the two balance
+        // rectangles are independently optional and a member who never opens
+        // the warehouse is never nagged for them (#22).
+        var regions = new ToolStripMenuItem("Watched regions");
+        foreach (var kind in RegionKinds)
+        {
+            var item = new ToolStripMenuItem("", null, async (_, _) => await PickRegionAsync(kind))
+            {
+                ToolTipText = kind == Settings.RegionKind.Loot
+                    ? "Click to pick the loot chat rectangle. Drag it around the chat text."
+                    : "Open the panel in-game first, then click. Drag around the silver figure and as " +
+                      "little else — a neighbouring button inside the rectangle spoils the read.",
+            };
+            _regionItems[kind] = item;
+            regions.DropDownItems.Add(item);
+        }
+        regions.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var kind in RegionKinds)
+        {
+            // Forgetting the loot log would just disable the app; the two
+            // optional rectangles are the ones worth being able to drop, and
+            // dropping a badly aimed one stops it spending passes on scenery.
+            if (kind == Settings.RegionKind.Loot) continue;
+            var item = new ToolStripMenuItem($"Forget {RegionName(kind).ToLowerInvariant()}", null,
+                async (_, _) => await ForgetRegionAsync(kind));
+            _forgetItems[kind] = item;
+            regions.DropDownItems.Add(item);
+        }
 
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip { ShowItemToolTips = true };
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
-        menu.Items.Add("Pick loot log region…", null, async (_, _) => await PickRegionAsync(Settings.RegionKind.Loot));
-        menu.Items.Add(silver);
+        menu.Items.Add(regions);
         menu.Items.Add(_watchItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
@@ -77,17 +102,13 @@ public sealed class TrayContext : ApplicationContext
         _icon.DoubleClick += (_, _) => ShowLog();
         _icon.BalloonTipClicked += (_, _) => OpenReleasesPage();
 
+        RefreshRegionMenu();
+
         _log.Append($"Lushbdo Companion {UpdateChecker.Current.ToString(3)} started.");
         _log.Append(_settings.IsPaired
             ? $"Paired. Site: {_settings.BaseUrl}"
             : "Not paired yet — open Settings and paste a device token from the site's Devices page.");
-        _log.Append(_settings.RegionFor(Settings.RegionKind.Loot) is { } region
-            ? $"Loot log region saved: {region.Width}×{region.Height} at ({region.X}, {region.Y}) in the game window. Right-click the tray icon → Start watching."
-            : _settings.HasScreenRelativeRegion
-                ? "Capture is tied to the game window now, and the old screen-relative region cannot be carried over — right-click the tray icon → Pick loot log region once more."
-                : "No loot log region yet — right-click the tray icon → Pick loot log region while the game shows its loot chat.");
-        foreach (var (kind, rect) in _settings.BalanceRegions)
-            _log.Append($"{RegionName(kind)} region saved: {rect.Width}×{rect.Height} at ({rect.X}, {rect.Y}) in the game window — read for your silver balance while that panel is open, and never sent.");
+        LogRegions();
 
         if (!_settings.IsPaired) ShowSettings();
 
@@ -105,10 +126,54 @@ public sealed class TrayContext : ApplicationContext
         _log.Activate();
     }
 
+    private static readonly Settings.RegionKind[] RegionKinds =
+        [Settings.RegionKind.Loot, Settings.RegionKind.Warehouse, Settings.RegionKind.Marketplace];
+
     /// <summary>
-    /// What each rectangle is called, in the log and in the picker. The loot
-    /// log is the one the app cannot work without; the two balance rectangles
-    /// are independently optional.
+    /// Put every rectangle's current state on its own menu item — set or not,
+    /// and exactly where. The pixels are there because they are the only way
+    /// to tell two rectangles apart at a glance when one of them is aimed
+    /// wrong, which is the thing that actually goes wrong (#22 field session).
+    /// </summary>
+    private void RefreshRegionMenu()
+    {
+        foreach (var kind in RegionKinds)
+        {
+            var rect = _settings.RegionFor(kind);
+            _regionItems[kind].Text = rect is { } r
+                ? $"{RegionName(kind)} — {r.Width}×{r.Height} at ({r.X}, {r.Y})"
+                : $"{RegionName(kind)} — not picked yet";
+            _regionItems[kind].Checked = rect is not null;
+            if (_forgetItems.TryGetValue(kind, out var forget)) forget.Enabled = rect is not null;
+        }
+        _watchItem.Enabled = _settings.RegionFor(Settings.RegionKind.Loot) is not null;
+    }
+
+    /// <summary>The same state in the log, so a pasted log says what was watched.</summary>
+    private void LogRegions()
+    {
+        if (_settings.RegionFor(Settings.RegionKind.Loot) is null)
+        {
+            _log.Append(_settings.HasScreenRelativeRegion
+                ? "Capture is tied to the game window now, and the old screen-relative region cannot be carried " +
+                  "over — right-click the tray icon → Watched regions → Loot log, once more."
+                : "No loot log region yet — right-click the tray icon → Watched regions → Loot log, while the game " +
+                  "shows its loot chat.");
+        }
+        foreach (var kind in RegionKinds)
+        {
+            if (_settings.RegionFor(kind) is not { } r) continue;
+            _log.Append($"Region · {RegionName(kind)}: {r.Width}×{r.Height} at ({r.X}, {r.Y}) in the game window." +
+                        (kind == Settings.RegionKind.Loot
+                            ? " Right-click the tray icon → Start watching."
+                            : " Read for your silver balance while that panel is open, and never sent."));
+        }
+    }
+
+    /// <summary>
+    /// What each rectangle is called, in the log, the menu and the picker. The
+    /// loot log is the one the app cannot work without; the two balance
+    /// rectangles are independently optional.
     /// </summary>
     private static string RegionName(Settings.RegionKind kind) => kind switch
     {
@@ -228,8 +293,8 @@ public sealed class TrayContext : ApplicationContext
 
         _settings.SetRegion(kind, region.Value);
         _settings.Save();
-        _watchItem.Enabled = _settings.RegionFor(Settings.RegionKind.Loot) is not null;
-        _log.Append($"{RegionName(kind)} region set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
+        RefreshRegionMenu();
+        _log.Append($"Region · {RegionName(kind)} set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
         if (!_watchItem.Enabled)
         {
             // One capture session serves every rectangle and it is aimed at
@@ -241,18 +306,24 @@ public sealed class TrayContext : ApplicationContext
         await StartWatchingAsync(); // picking a region is the intent to watch it
     }
 
-    private async Task ForgetBalanceRegionsAsync()
+    /// <summary>
+    /// Drop one rectangle. Worth having per-region rather than all-or-nothing:
+    /// a badly aimed one spends passes on scenery every time it goes still,
+    /// and the answer to that should not be re-picking the one that works.
+    /// </summary>
+    private async Task ForgetRegionAsync(Settings.RegionKind kind)
     {
-        if (_settings.BalanceRegions.Count == 0)
+        if (_settings.RegionFor(kind) is null)
         {
-            _log.Append("No silver balance regions are set.");
+            _log.Append($"{RegionName(kind)} is not set.");
             return;
         }
         var wasWatching = _watcher is not null;
-        if (wasWatching) StopWatching("Stopped watching while the silver regions are dropped.");
-        _settings.ForgetBalanceRegions();
+        if (wasWatching) StopWatching($"Stopped watching while {RegionName(kind).ToLowerInvariant()} is dropped.");
+        _settings.ForgetRegion(kind);
         _settings.Save();
-        _log.Append("Silver balance regions forgotten — nothing but the loot log is watched now.");
+        RefreshRegionMenu();
+        _log.Append($"Region · {RegionName(kind)} forgotten — it is no longer read.");
         if (wasWatching) await StartWatchingAsync();
     }
 
