@@ -37,7 +37,14 @@ public sealed class PaddleOcrReader : IOcrReader
     private const int Threads = 2;
 
     private RapidOcr? _ocr;
-    private RapidOcrOptions _options = RapidOcrOptions.Default;
+
+    // Two recipes, differing only in the detector's scan border. The chat
+    // region does not need one — its rows sit well inside the frame, and the
+    // border is work for nothing. A crop drawn around a balance is the
+    // opposite case by construction, and without the border the detector
+    // drops the row nearest the edge. See IOcrReader.ReadAsync.
+    private RapidOcrOptions _regionOptions = RapidOcrOptions.Default;
+    private RapidOcrOptions _tightOptions = RapidOcrOptions.Default;
 
     public Task StartAsync(int frameWidth, int frameHeight)
     {
@@ -50,13 +57,13 @@ public sealed class PaddleOcrReader : IOcrReader
             OcrModels.Dictionary,
             RapidOcr.GetDefaultSessionOptions(Threads));
         _ocr = ocr;
-        // No 180° classifier — chat text is upright by construction — and no
-        // scan border, which is a page-scanning affordance this never needs.
-        _options = RapidOcrOptions.Default with { DoAngle = false, Padding = 0 };
+        // No 180° classifier either way — chat text is upright by construction.
+        _regionOptions = RapidOcrOptions.Default with { DoAngle = false, Padding = 0 };
+        _tightOptions = RapidOcrOptions.Default with { DoAngle = false };
         return Task.CompletedTask;
     }
 
-    public async Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height)
+    public async Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height, bool tightCrop = false)
     {
         var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Opaque);
         using var bitmap = new SKBitmap(info);
@@ -79,7 +86,7 @@ public sealed class PaddleOcrReader : IOcrReader
         // and a few hundred milliseconds of inference on it is a stalled
         // capture. Windows.Media.Ocr was asynchronous for free; this one has to
         // be asked.
-        var result = await _ocr!.DetectAsync(bitmap, _options);
+        var result = await _ocr!.DetectAsync(bitmap, tightCrop ? _tightOptions : _regionOptions);
 
         var pieces = new List<OcrRows.Piece>();
         foreach (var block in result.TextBlocks)

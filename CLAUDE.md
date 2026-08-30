@@ -135,6 +135,15 @@ Dust` came back as `Ancient. Spirit. Oust` 1160 times in one session and
 correctly zero times — which is why more frames and more voting could not
 close it.
 
+Two things the balance crops taught that no amount of desk reasoning would
+have: PaddleOCR's scan border is **not optional on a tight crop** — with
+`Padding = 0`, the recipe the chat region uses, it read a warehouse balance 0
+times out of 6 and returned a clean `Warehouse Balance` with the digits simply
+absent — and a figure can be short because a button's hover overlay is
+physically covering it, which is occlusion rather than misreading and is
+invisible to every shape and agreement rule there is. The cross-panel check is
+the only thing that sees that one.
+
 Balance crops are the one thing that fold must *not* be applied to: `--balance`
 scores the `-bal` snapshots on **exact match**, because a fold about confusable
 letters says nothing about a number where one wrong digit is the whole failure.

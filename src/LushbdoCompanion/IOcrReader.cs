@@ -57,6 +57,17 @@ public interface IOcrReader : IDisposable
 
     /// <summary>
     /// Read the frame. Pieces come back positioned in capture pixels.
+    ///
+    /// <paramref name="tightCrop"/> says the text runs close to the edges
+    /// because the rectangle was drawn *around* it — a balance crop, not a
+    /// region that happens to contain text. It is not a preference: the
+    /// detector's scan border is what gives it room to find a row near the
+    /// boundary, and with the border off it silently drops that row. Measured
+    /// on six field crops of a warehouse balance (2026-08-30), the same
+    /// recognizer read the figure 0 times without the border and 6 times with
+    /// it, returning only the label `Warehouse Balance` on every failure — a
+    /// clean read of the wrong half of the picture, with nothing to mark it as
+    /// incomplete.
     /// </summary>
-    Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height);
+    Task<List<OcrRows.Piece>> ReadAsync(byte[] bgra, int width, int height, bool tightCrop = false);
 }
