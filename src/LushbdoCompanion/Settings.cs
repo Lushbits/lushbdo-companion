@@ -27,14 +27,42 @@ public sealed class Settings
     /// </summary>
     public bool UseWindowsOcr { get; set; }
 
-    // The loot-chat rectangle from the region picker, in physical pixels
-    // relative to the game window's visible top-left — the surface window
-    // capture serves. Window-relative on purpose: it survives the game
-    // restarting or the window moving. Zero size means never picked.
+    /// <summary>
+    /// The rectangles the app watches, by name. All of them are in physical
+    /// pixels relative to the game window's visible top-left — the surface
+    /// window capture serves — because window-relative coordinates survive the
+    /// game restarting or the window moving.
+    ///
+    /// Only the loot log is required. The two balance rectangles (#22) are
+    /// independently optional: somebody who never opens the marketplace never
+    /// picks that one, and the app never asks for it.
+    /// </summary>
+    public enum RegionKind { Loot, Warehouse, Marketplace }
+
+    /// <summary>One saved rectangle, window-relative physical pixels.</summary>
+    public sealed class StoredRegion
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+    }
+
+    // The loot-chat rectangle keeps the four flat keys it has always had, so
+    // an existing settings.json comes out the other side with its region
+    // intact and nobody who has already picked is asked to pick again. The
+    // rectangles that arrived with #22 are nested and nullable — absent means
+    // never picked, which is a different thing from zero-sized.
     public int WindowRegionX { get; set; }
     public int WindowRegionY { get; set; }
     public int WindowRegionWidth { get; set; }
     public int WindowRegionHeight { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StoredRegion? WarehouseRegion { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StoredRegion? MarketplaceRegion { get; set; }
 
     // Builds before window capture stored a screen-relative region under these
     // names. It cannot be translated without the game window it was picked
@@ -52,20 +80,60 @@ public sealed class Settings
     [JsonIgnore]
     public bool HasScreenRelativeRegion => RegionWidth > 0 && RegionHeight > 0;
 
-    [JsonIgnore]
-    public Rectangle? Region =>
-        WindowRegionWidth > 0 && WindowRegionHeight > 0
-            ? new Rectangle(WindowRegionX, WindowRegionY, WindowRegionWidth, WindowRegionHeight)
-            : null;
-
-    public void SetRegion(Rectangle regionInWindow)
+    public Rectangle? RegionFor(RegionKind kind) => kind switch
     {
-        WindowRegionX = regionInWindow.X;
-        WindowRegionY = regionInWindow.Y;
-        WindowRegionWidth = regionInWindow.Width;
-        WindowRegionHeight = regionInWindow.Height;
-        RegionX = RegionY = RegionWidth = RegionHeight = 0; // the migration ends here
+        RegionKind.Loot => WindowRegionWidth > 0 && WindowRegionHeight > 0
+            ? new Rectangle(WindowRegionX, WindowRegionY, WindowRegionWidth, WindowRegionHeight)
+            : null,
+        RegionKind.Warehouse => ToRectangle(WarehouseRegion),
+        _ => ToRectangle(MarketplaceRegion),
+    };
+
+    public void SetRegion(RegionKind kind, Rectangle regionInWindow)
+    {
+        var stored = new StoredRegion
+        {
+            X = regionInWindow.X,
+            Y = regionInWindow.Y,
+            Width = regionInWindow.Width,
+            Height = regionInWindow.Height,
+        };
+        switch (kind)
+        {
+            case RegionKind.Loot:
+                WindowRegionX = stored.X;
+                WindowRegionY = stored.Y;
+                WindowRegionWidth = stored.Width;
+                WindowRegionHeight = stored.Height;
+                RegionX = RegionY = RegionWidth = RegionHeight = 0; // the migration ends here
+                break;
+            case RegionKind.Warehouse:
+                WarehouseRegion = stored;
+                break;
+            default:
+                MarketplaceRegion = stored;
+                break;
+        }
     }
+
+    /// <summary>Drop both balance rectangles — the way out of a badly aimed one.</summary>
+    public void ForgetBalanceRegions() => WarehouseRegion = MarketplaceRegion = null;
+
+    /// <summary>The balance rectangles that have actually been picked, in menu order.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<(RegionKind Kind, Rectangle Rect)> BalanceRegions
+    {
+        get
+        {
+            var picked = new List<(RegionKind, Rectangle)>(2);
+            foreach (var kind in new[] { RegionKind.Warehouse, RegionKind.Marketplace })
+                if (RegionFor(kind) is { } rect) picked.Add((kind, rect));
+            return picked;
+        }
+    }
+
+    private static Rectangle? ToRectangle(StoredRegion? stored) =>
+        stored is { Width: > 0, Height: > 0 } ? new Rectangle(stored.X, stored.Y, stored.Width, stored.Height) : null;
 
     private static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lushbdo-companion");

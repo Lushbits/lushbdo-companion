@@ -18,13 +18,15 @@ public sealed class FrozenRegionPickerForm : Form
     public Rectangle Selection { get; private set; }
 
     private readonly Bitmap _still;
+    private readonly string _hint;
     private Point _dragStart;
     private Rectangle _dragRect; // display coordinates; mapped to frame pixels on mouse-up
     private bool _dragging;
 
-    public FrozenRegionPickerForm(Bitmap still, Rectangle screenBounds)
+    public FrozenRegionPickerForm(Bitmap still, Rectangle screenBounds, string hint)
     {
         _still = still;
+        _hint = hint;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         Bounds = screenBounds;
@@ -129,11 +131,11 @@ public sealed class FrozenRegionPickerForm : Form
             g.ResetClip();
         }
 
-        const string hint = "This is a frozen frame of the game window — drag a rectangle around its loot chat tab. Esc cancels.";
         using var hintFont = new Font("Segoe UI", 14f, FontStyle.Bold);
-        var hintSize = g.MeasureString(hint, hintFont);
-        g.DrawString(hint, hintFont, Brushes.White,
-            new PointF((ClientSize.Width - hintSize.Width) / 2f, ClientSize.Height * 0.12f));
+        var hintSize = g.MeasureString(_hint, hintFont, ClientSize.Width - 80);
+        g.DrawString(_hint, hintFont, Brushes.White,
+            new RectangleF((ClientSize.Width - hintSize.Width) / 2f, ClientSize.Height * 0.12f,
+                hintSize.Width, hintSize.Height));
 
         if (_dragRect.Width <= 0) return;
         using var pen = new Pen(Color.FromArgb(102, 217, 108), 2f);

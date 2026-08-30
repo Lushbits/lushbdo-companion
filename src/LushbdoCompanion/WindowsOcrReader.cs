@@ -17,6 +17,9 @@ public sealed class WindowsOcrReader : IOcrReader
     public string Name => _ocr is null ? "Windows OCR" : $"Windows OCR ({_ocr.RecognizerLanguage.DisplayName})";
     public bool ReadsKeyed => true;
 
+    // 0 of 1,332 comma-grouped numbers read correctly in the #18 bake-off.
+    public bool ReadsGroupedDigits => false;
+
     private OcrEngine? _ocr;
     private int _scale;                // small chat text OCRs far better enlarged
     private SoftwareBitmap? _input;    // reallocated when either dimension changes

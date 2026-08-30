@@ -97,6 +97,44 @@ Three things to know while it runs:
 - **Silver is recognized and deliberately not sent** — gather sessions count
   items, not currency.
 
+### Watching your silver balance
+
+Optional, and off until you pick a rectangle for it. The warehouse figure and
+the market figure are **one number shown in two places**, never two to add —
+either reading is the whole answer.
+
+**Open the panel in-game first**, then from the tray icon: **Watch silver
+balance → Pick warehouse region…** (or marketplace). The picker photographs the
+game as it is *right now*, so with the panel closed there is nothing to drag a
+rectangle around. If the game closed the panel when you tabbed away, press Esc
+and the app offers to pick on the live screen after a three-second countdown
+instead.
+
+Both rectangles are independently optional — pick neither, one, or both. They
+ride the same **Start watching** toggle and the same capture as the loot log,
+because a second capture session would double what the compositor does per
+tick. **Watch silver balance → Forget both** drops them again.
+
+**Nothing is sent.** This step reads the figure and writes it to the log;
+feeding it to the site is separate work. Three things the log tells apart:
+
+- nothing at all — no panel is open over the rectangle, so nothing was read
+- read but not confirmed, with the reason — a shape the app will not stand
+  behind, readings that never agreed, or two panels disagreeing
+- confirmed at a value
+
+A figure the app is not sure of is never confirmed, and it is strict on
+purpose: a balance has no register behind it the way a loot line does, so
+`1,000` misread as `1,00` would land silently and stay. So the app takes the
+one number in the crop, requires it grouped in threes, requires three readings
+to agree, and refuses everything else — including a crop with two numbers in
+it. When it refuses, the figure you already have stands.
+
+**Windows OCR does not read balances.** It reads comma-grouped numbers as
+letters (0 of 1,332 read correctly in the app's own bake-off), so with *Read
+with Windows OCR* ticked the silver rectangles are skipped and the log says so,
+rather than spending passes to confirm nothing.
+
 On Windows 11 the app asks the OS to skip the yellow "this window is being
 captured" border and usually may. On Windows 10 that API does not exist: the
 border around the game window is unavoidable there, same as with OBS.
@@ -111,6 +149,14 @@ border around the game window is unavoidable there, same as with OBS.
 - OCR reads the median-stabilized image at half the capture pace, and only
   when that image actually changed — a still scene costs a few milliseconds
   of arithmetic per tick and no OCR at all.
+- The silver rectangles are gated the opposite way round, on **stillness**:
+  two consecutive frames near-identical means a panel is up and worth a look,
+  anything else is the moving world and is dropped before any reading. With no
+  panel open that is one sampled diff over a few thousand pixels per tick and
+  nothing else, and one still picture is read at most six times however long it
+  sits there — so the cost is a short burst when you open your warehouse, not a
+  standing charge. A pass over a digit-sized crop measures ~65 ms warm against
+  the chat region's ~340 ms.
 - Buffers are allocated once and reused — the steady state allocates
   practically nothing, so the GC stays quiet.
 - The process runs at below-normal priority: when the game wants the CPU,

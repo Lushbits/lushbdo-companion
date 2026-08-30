@@ -25,6 +25,7 @@ public sealed class PaddleOcrReader : IOcrReader
 {
     public string Name => "PaddleOCR PP-OCRv5";
     public bool ReadsKeyed => false;
+    public bool ReadsGroupedDigits => true;
 
     /// <summary>
     /// ONNX threads. Two, deliberately: the game is the foreground application
