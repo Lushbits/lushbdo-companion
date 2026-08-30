@@ -17,7 +17,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
     private readonly ToolStripMenuItem _traceItem;
-    private readonly ToolStripMenuItem _windowsOcrItem;
+    private readonly ToolStripMenuItem _silverOnlyItem;
 
     // All three rectangles live in one submenu and each says what it is set
     // to, because "which of these did I actually pick, and where?" was a
@@ -37,7 +37,7 @@ public sealed class TrayContext : ApplicationContext
 
         _watchItem = new ToolStripMenuItem("Start watching", null, async (_, _) => await ToggleWatchingAsync())
         {
-            Enabled = _settings.RegionFor(Settings.RegionKind.Loot) is not null
+            Enabled = CanWatch
         };
 
         _traceItem = new ToolStripMenuItem("Trace OCR to file", null, (_, _) => ToggleTrace())
@@ -45,15 +45,10 @@ public sealed class TrayContext : ApplicationContext
             Checked = _settings.TraceOcr
         };
 
-        _windowsOcrItem = new ToolStripMenuItem("Read with Windows OCR (lighter, less accurate)", null, (_, _) => ToggleReader())
-        {
-            Checked = _settings.UseWindowsOcr
-        };
-
-        // One place for every rectangle, each showing what it is set to. The
-        // loot log is the one the app cannot work without; the two balance
-        // rectangles are independently optional and a member who never opens
-        // the warehouse is never nagged for them (#22).
+        // One place for both rectangles, each showing what it is set to. The
+        // silver one is optional and the app never nags for it; the loot one is
+        // optional too under "Watch silver only", which is the whole point of
+        // that mode.
         var regions = new ToolStripMenuItem("Watched regions");
         foreach (var kind in RegionKinds)
         {
@@ -76,16 +71,23 @@ public sealed class TrayContext : ApplicationContext
             regions.DropDownItems.Add(item);
         }
 
+        _silverOnlyItem = new ToolStripMenuItem("Watch silver only (much lighter)", null, async (_, _) => await ToggleSilverOnlyAsync())
+        {
+            Checked = _settings.SilverOnly,
+            ToolTipText = "Skip the loot log entirely and read only the silver rectangle. The loot log is what " +
+                          "costs CPU — it keys every frame and reads the chat — so this is far lighter on a laptop.",
+        };
+
         var menu = new ContextMenuStrip { ShowItemToolTips = true };
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
         menu.Items.Add(regions);
+        menu.Items.Add(_silverOnlyItem);
         menu.Items.Add(_watchItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
         menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
         menu.Items.Add(_traceItem);
-        menu.Items.Add(_windowsOcrItem);
         menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
@@ -107,6 +109,11 @@ public sealed class TrayContext : ApplicationContext
         _log.Append(_settings.IsPaired
             ? $"Paired. Site: {_settings.BaseUrl}"
             : "Not paired yet — open Settings and paste a device token from the site's Devices page.");
+        if (_settings.HadWindowsOcrPreference)
+            _log.Append("You had \"Read with Windows OCR\" switched on. That option is gone — it read barely half " +
+                        "the loot rows and could not read a silver balance at all. If you turned it on to save CPU, " +
+                        "the setting that does that properly is \"Watch silver only\", which skips the loot log " +
+                        "instead of reading it badly.");
         LogRegions();
 
         if (!_settings.IsPaired) ShowSettings();
@@ -145,13 +152,28 @@ public sealed class TrayContext : ApplicationContext
             _regionItems[kind].Checked = rect is not null;
             if (_forgetItems.TryGetValue(kind, out var forget)) forget.Enabled = rect is not null;
         }
-        _watchItem.Enabled = _settings.RegionFor(Settings.RegionKind.Loot) is not null;
+        _watchItem.Enabled = CanWatch;
+        _silverOnlyItem.Checked = _settings.SilverOnly;
     }
+
+    /// <summary>
+    /// What "Start watching" needs: in silver-only the balance rectangle is
+    /// enough on its own, and the loot rectangle is not looked at.
+    /// </summary>
+    private bool CanWatch => _settings.SilverOnly
+        ? _settings.BalanceRegion is not null
+        : _settings.RegionFor(Settings.RegionKind.Loot) is not null;
 
     /// <summary>The same state in the log, so a pasted log says what was watched.</summary>
     private void LogRegions()
     {
-        if (_settings.RegionFor(Settings.RegionKind.Loot) is null)
+        if (_settings.SilverOnly)
+        {
+            _log.Append(_settings.BalanceRegion is null
+                ? "Silver only is on, but no silver rectangle is picked — Watched regions → Marketplace silver."
+                : "Silver only is on — the loot log is not read at all.");
+        }
+        else if (_settings.RegionFor(Settings.RegionKind.Loot) is null)
         {
             _log.Append(_settings.HasScreenRelativeRegion
                 ? "Capture is tied to the game window now, and the old screen-relative region cannot be carried " +
@@ -364,7 +386,9 @@ public sealed class TrayContext : ApplicationContext
 
     private async Task StartWatchingAsync()
     {
-        if (_watcher is not null || _settings.RegionFor(Settings.RegionKind.Loot) is not { } region) return;
+        if (_watcher is not null || !CanWatch) return;
+        // In silver-only the loot rectangle is not watched even when it is set.
+        var region = _settings.SilverOnly ? null : _settings.RegionFor(Settings.RegionKind.Loot);
 
         LootSender? sender = null;
         SilverSender? silver = null;
@@ -386,8 +410,11 @@ public sealed class TrayContext : ApplicationContext
                     "The site rejected this device's token — nothing is being sent.", ToolTipIcon.Warning);
             }, null);
 
-            sender = new LootSender(_client, Say);
-            sender.Revoked += OnRevoked;
+            if (region is not null)
+            {
+                sender = new LootSender(_client, Say);
+                sender.Revoked += OnRevoked;
+            }
 
             // One credential opens both routes (bdo#668), so a revoked token
             // stops the balance the same way it stops the loot, and says so
@@ -416,8 +443,11 @@ public sealed class TrayContext : ApplicationContext
         _silver = silver;
         if (_settings.TraceOcr) watcher.SetTracing(true);
         _watchItem.Text = "Stop watching";
-        _log.Append("Watching the loot log. New pickups are confirmed across frames, then sent to your running gather " +
-                    "session in small batches — start one on the site and play.");
+        _log.Append(_settings.SilverOnly
+            ? "Watching the silver balance only. The loot log is not read at all — no keying, no chat OCR — so this " +
+              "costs a sampled diff over a small crop per tick and nothing else until a market panel is open."
+            : "Watching the loot log. New pickups are confirmed across frames, then sent to your running gather " +
+              "session in small batches — start one on the site and play.");
         if (_silver is not null)
             _log.Append("Your silver balance is sent too, whenever a confirmed figure differs from the one the site " +
                         "already has — no gather session needed for that one.");
@@ -425,45 +455,50 @@ public sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// Start on the preferred reader, and fall back to the OS one if it cannot
-    /// run at all. PaddleOCR's ONNX Runtime links the *shared* Visual C++
-    /// runtime — the redistributable Black Desert itself installs, so it is
-    /// there on any machine that can run the game this app watches. "In
-    /// practice" is not a thing to fail a member's session over, though, so a
-    /// machine without it reads a little worse instead of not reading.
+    /// One recognizer. There used to be a fallback to the OS one, and it was
+    /// removed because it could not do the job: half the loot rows, and no
+    /// silver at all. A machine that cannot run PaddleOCR now gets one sentence
+    /// naming the fix instead of an app that quietly reads worse.
     /// </summary>
-    private async Task<LootWatcher?> StartWatcherAsync(Rectangle region, LootSender? sender, SilverSender? silver)
+    private async Task<LootWatcher?> StartWatcherAsync(Rectangle? region, LootSender? sender, SilverSender? silver)
     {
-        var order = _settings.UseWindowsOcr ? new[] { "windows" } : new[] { "paddle", "windows" };
-        foreach (var which in order)
+        var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add,
+            reader: new PaddleOcrReader(),
+            balance: _settings.BalanceRegion is { } balanceRect
+                // Unpaired reads and logs and sends nothing; that is said here
+                // rather than left as a null nobody notices.
+                ? new LootWatcher.BalanceWatch(balanceRect, silver is null ? _ => { } : silver.Record)
+                : null);
+        try
         {
-            IOcrReader reader = which == "windows" ? new WindowsOcrReader() : new PaddleOcrReader();
-            var watcher = new LootWatcher(region, _log.Append, sender is null ? null : sender.Add, reader: reader,
-                balance: _settings.BalanceRegion is { } balanceRect
-                    // Unpaired reads and logs and sends nothing; that is said
-                    // here rather than left as a null nobody notices.
-                    ? new LootWatcher.BalanceWatch(balanceRect, silver is null ? _ => { } : silver.Record)
-                    : null);
-            try
-            {
-                await watcher.StartAsync();
-                return watcher;
-            }
-            catch (Exception e)
-            {
-                watcher.Dispose();
-                if (which != "paddle")
-                {
-                    _log.Append($"Could not start watching: {e.Message}");
-                    ShowLog();
-                    return null;
-                }
-                _log.Append($"PaddleOCR could not start ({e.Message}) — reading with Windows OCR instead, which finds " +
-                            "fewer rows. Installing the Microsoft Visual C++ 2015-2022 Redistributable (x64) is the " +
-                            "usual fix; most machines already have it.");
-            }
+            await watcher.StartAsync();
+            return watcher;
         }
-        return null;
+        catch (Exception e)
+        {
+            watcher.Dispose();
+            _log.Append($"Could not start watching: {e.Message}");
+            // Only when the failure is actually about a missing native library.
+            // Telling somebody on Windows 10 1909 to install a redistributable
+            // is advice that cannot help them.
+            if (LooksLikeMissingNativeLibrary(e))
+                _log.Append("That is the native runtime PaddleOCR needs: install the Microsoft Visual C++ " +
+                            "2015-2022 Redistributable (x64). Black Desert normally installs it, so this is rare.");
+            ShowLog();
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// A DllNotFoundException, or a load failure carrying one underneath it —
+    /// which is how a missing MSVCP140 surfaces through ONNX Runtime's own
+    /// initialisation rather than as a clean throw at the P/Invoke boundary.
+    /// </summary>
+    private static bool LooksLikeMissingNativeLibrary(Exception error)
+    {
+        for (var e = error; e is not null; e = e.InnerException)
+            if (e is DllNotFoundException or BadImageFormatException) return true;
+        return false;
     }
 
     private void StopWatching(string message)
@@ -478,6 +513,36 @@ public sealed class TrayContext : ApplicationContext
         _log.Append(message);
     }
 
+    /// <summary>
+    /// The loot log is what costs CPU, so this is the setting that answers "it
+    /// uses too much on my laptop" (16% was the field report). It takes effect
+    /// at once rather than at the next watch, because a member who reaches for
+    /// it wants the CPU back now.
+    /// </summary>
+    private async Task ToggleSilverOnlyAsync()
+    {
+        _settings.SilverOnly = !_settings.SilverOnly;
+        _settings.Save();
+        RefreshRegionMenu();
+
+        var wasWatching = _watcher is not null;
+        if (wasWatching) StopWatching(_settings.SilverOnly
+            ? "Switching to silver only — the loot log will not be read."
+            : "Switching back to watching the loot log as well.");
+
+        if (!CanWatch)
+        {
+            _log.Append(_settings.SilverOnly
+                ? "Silver only is on, but no silver rectangle is picked — Watched regions → Marketplace silver."
+                : "No loot log region is picked — Watched regions → Loot log.");
+            return;
+        }
+        if (wasWatching) await StartWatchingAsync();
+        else _log.Append(_settings.SilverOnly
+            ? "Silver only is on. Start watching to read just the balance."
+            : "Silver only is off. Start watching to read the loot log as well.");
+    }
+
     private void ToggleTrace()
     {
         _settings.TraceOcr = !_settings.TraceOcr;
@@ -485,22 +550,6 @@ public sealed class TrayContext : ApplicationContext
         _traceItem.Checked = _settings.TraceOcr;
         if (_watcher is not null) _watcher.SetTracing(_settings.TraceOcr);
         else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
-    }
-
-    /// <summary>
-    /// Swapping the recognizer changes what a pass costs and what it reads, so
-    /// it takes effect on the next watch rather than mid-session — a reader
-    /// changing under a board that is mid-consensus is a way to lose rows.
-    /// </summary>
-    private void ToggleReader()
-    {
-        _settings.UseWindowsOcr = !_settings.UseWindowsOcr;
-        _settings.Save();
-        _windowsOcrItem.Checked = _settings.UseWindowsOcr;
-        var which = _settings.UseWindowsOcr ? "Windows OCR" : "PaddleOCR";
-        _log.Append(_watcher is null
-            ? $"Reading with {which} from the next watch."
-            : $"Reading with {which} from the next watch — restart watching to switch now.");
     }
 
     private void ShowSettings()

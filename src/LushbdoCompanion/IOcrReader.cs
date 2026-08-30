@@ -1,29 +1,34 @@
 namespace LushbdoCompanion;
 
 /// <summary>
-/// A recognizer, behind a seam, because #18's bake-off ended with two of them
-/// worth keeping and one clear winner.
+/// The recognizer, behind a seam. There is one implementation now, and the
+/// seam stays for the reason it was introduced: the watcher takes a reader
+/// rather than making one, so a future engine is a swap rather than surgery.
 ///
-/// The two differ in what they want to be shown, which is the whole finding.
-/// Windows.Media.Ocr needs the world taken away first — it reads the keyed
-/// frame and falls apart on raw pixels (36% of names right against 89%).
-/// PaddleOCR is a scene-text model: text over a photograph is its training
-/// set, which is exactly what a transparent chat log is, and it wants the raw
-/// frame — keyed, its hard-thresholded strokes are so far out of distribution
-/// that it drops to 28%. So a reader states which buffer it reads and the
-/// watcher hands it that one; the keyer keeps running regardless, because the
-/// change gate that makes an idle chat free is built on it.
-///
-/// Measured over the 60-frame field corpus (2026-08-22), scored through the
-/// site's own `item_name_key` fold so case and confusable glyphs count as
-/// matches the way the register will count them:
+/// It used to have two, and the second one was Windows.Media.Ocr. That is gone
+/// — not because PaddleOCR merely reads better, but because the OS recognizer
+/// cannot do half the job at all. Measured over the 60-frame field corpus
+/// (2026-08-22), scored through the site's own `item_name_key` fold so case
+/// and confusable glyphs count as matches the way the register counts them:
 ///
 ///   Windows.Media.Ocr, keyed   550 of 1020 rows fully read,  88.6% names,  60 ms
 ///   PaddleOCR PP-OCRv5, raw    963 of 1020 rows fully read,  96.9% names, 337 ms
 ///
 /// The gap is mostly not spelling — it is rows Windows.Media.Ocr cannot read
 /// at all: it returned a closed bracket pair on 762 rows against PaddleOCR's
-/// 1016.
+/// 1016. And on the silver balance it is worse than a gap: the same bake-off
+/// has `Gold Bar I,OOOG` at 1,332 occurrences and **0 read correctly**, a
+/// comma-grouped number with its digits read as letters, which is exactly what
+/// a balance crop is. Kept as a fallback it was a switch that quietly halved
+/// the loot read and turned silver off, offered in the tray as though it were
+/// a preference.
+///
+/// So PaddleOCR is a hard requirement, and with it the Visual C++
+/// 2015-2022 redistributable its ONNX Runtime links against. Black Desert
+/// installs that, so a machine that can run the game this app watches has it;
+/// a machine without it now gets one sentence naming the fix rather than an
+/// app that silently reads worse. Every reader here is handed the raw captured
+/// frame — the keyer stays, but only as the change gate it became.
 /// </summary>
 public interface IOcrReader : IDisposable
 {
@@ -31,29 +36,15 @@ public interface IOcrReader : IDisposable
     string Name { get; }
 
     /// <summary>
-    /// True when this reader is shown the keyer's output, false when it reads
-    /// the captured pixels as they came.
-    /// </summary>
-    bool ReadsKeyed { get; }
-
-    /// <summary>
-    /// Whether a comma-grouped figure survives this reader well enough to be
-    /// worth reading at all. It is not a preference: the same bake-off table
-    /// has `Gold Bar I,OOOG` at 1,332 occurrences and 0 read correctly on
-    /// Windows.Media.Ocr — a grouped number with its digits read as letters,
-    /// which is precisely the silver balance's input (#22). The strict shape
-    /// would refuse every one of those, which is the safe direction but means
-    /// spending passes to confirm nothing. So a reader that cannot hold digits
-    /// is not given the balance rectangles, and the member is told why rather
-    /// than left watching nothing happen.
-    /// </summary>
-    bool ReadsGroupedDigits { get; }
-
-    /// <summary>
     /// Prepare the reader; throws with a member-readable reason if it cannot
-    /// run at all (no language pack, no models).
+    /// run at all — for PaddleOCR, models that will not unpack.
+    ///
+    /// It took the frame's dimensions until the OS recognizer left, because
+    /// that one sized its upscale by them and refused a region past
+    /// `OcrEngine.MaxImageDimension`. Nothing reads them now, and a parameter
+    /// no implementation reads is a lie about what the seam needs.
     /// </summary>
-    Task StartAsync(int frameWidth, int frameHeight);
+    Task StartAsync();
 
     /// <summary>
     /// Read the frame. Pieces come back positioned in capture pixels.

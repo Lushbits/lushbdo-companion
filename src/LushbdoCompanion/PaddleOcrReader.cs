@@ -24,8 +24,6 @@ namespace LushbdoCompanion;
 public sealed class PaddleOcrReader : IOcrReader
 {
     public string Name => "PaddleOCR PP-OCRv5";
-    public bool ReadsKeyed => false;
-    public bool ReadsGroupedDigits => true;
 
     /// <summary>
     /// ONNX threads. Two, deliberately: the game is the foreground application
@@ -46,7 +44,7 @@ public sealed class PaddleOcrReader : IOcrReader
     private RapidOcrOptions _regionOptions = RapidOcrOptions.Default;
     private RapidOcrOptions _tightOptions = RapidOcrOptions.Default;
 
-    public Task StartAsync(int frameWidth, int frameHeight)
+    public Task StartAsync()
     {
         OcrModels.Unpack();
         var ocr = new RapidOcr();

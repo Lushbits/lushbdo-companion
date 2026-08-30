@@ -58,11 +58,13 @@ dotnet publish src/LushbdoCompanion -c Release   # the shippable single exe
 
 Target framework is `net8.0-windows10.0.22621.0` with
 `SupportedOSPlatformVersion` 10.0.19041.0 on purpose — the 19041 floor is what
-makes `Windows.Graphics.Capture` and `Windows.Media.Ocr` reachable, and the
+makes `Windows.Graphics.Capture` reachable (it carried `Windows.Media.Ocr` too
+until that recognizer was dropped, so capture alone holds the floor now), and the
 22621 target additionally projects the Windows 11 capture-border-off API
 (runtime-guarded via `ApiInformation`, so the exe still runs on 19041).
-Publish is self-contained single-file: users install nothing, so nothing here
-may grow a dependency that breaks that (no installers, no runtime prereqs).
+Publish is self-contained single-file: users install nothing beyond the one
+prerequisite below, so nothing here may grow a second one (no installers, and
+no runtime prereq that a machine running Black Desert does not already have).
 The recognizer is PaddleOCR PP-OCRv5 through ONNX Runtime, which is why the
 exe went from 78 MB to 103 MB: the ONNX and Skia natives ride inside it via
 `IncludeNativeLibrariesForSelfExtract`, and the four model files ride as
@@ -73,12 +75,21 @@ undoes the copy RapidOcrNet's own targets make.
 One asterisk on "no runtime prereqs", and it is stated rather than papered
 over: `onnxruntime.dll` imports `MSVCP140`/`VCRUNTIME140`, so it needs the
 Visual C++ 2015-2022 redistributable. Black Desert installs it, so any machine
-that can run the game this app watches already has it — but a machine without
-it falls back to `WindowsOcrReader` with the reason in the log rather than
-failing to watch. `libSkiaSharp.dll` carries its own CRT and needs nothing.
-Nothing else here may grow a native dependency without that same check
-(`dumpbin /dependents`, or the PE import table): a prereq that fails on a
-member's PC is worse than a recognizer that reads a little worse.
+that can run the game this app watches already has it; a machine without it is
+told to install it, in one sentence naming the fix.
+
+That used to be softer — it fell back to `WindowsOcrReader` rather than failing
+— and the softness was the problem. That fallback read 550 of 1020 field rows
+against PaddleOCR's 963 and **0 of 1,332 comma-grouped numbers**, so it halved
+the loot and turned silver off entirely, silently, while the tray offered it as
+a preference ("lighter, less accurate"). A recognizer that cannot do half the
+job is not a fallback, and the honest trade is now the other way round: name
+the prereq, rather than degrade under a member who has no way to tell. So the
+old line here — "a prereq that fails on a member's PC is worse than a
+recognizer that reads a little worse" — was retired on 2026-08-30 with its
+reasoning, and the check it demanded stays: nothing may grow a native
+dependency without `dumpbin /dependents` or the PE import table.
+`libSkiaSharp.dll` carries its own CRT and needs nothing.
 
 ## Versioning
 
@@ -124,11 +135,17 @@ shape (which is the only syntactic guard there is against a dropped digit),
 three agreeing readings rather than the board's two, and two panels that
 disagree confirming nothing.
 
-Two owner rulings closed #22's open questions on 2026-08-30. **Watching is all
-or nothing** — no silver-only mode, no per-region toggle; one capture serves
-every rectangle and it is aimed at the loot log, and removing a region is how
-you stop watching it, which is why every region including the loot log has its
-own Forget in the tray's `Watched regions` menu. And **one balance rectangle,
+Two owner rulings closed #22's open questions on 2026-08-30, and one of them
+was then overturned the same afternoon by a field report — a laptop at 16% CPU.
+**Watching was all or nothing**; it is now a `SilverOnly` mode, because the
+loot log is where essentially all the cost is (it keys every captured frame and
+reads the chat on a good fraction of ticks) and a member who only wants their
+silver on the site should not pay for it. The ruling was right when it was made
+and wrong once there was a benefit on the other side of it; the mode keeps the
+loot rectangle saved so switching back is a click rather than a re-pick. What
+survives from that morning is the rest: one capture serves every rectangle, and
+removing a region is still how you stop watching it, which is why every region
+including the loot log has its own Forget in the tray's `Watched regions` menu. And **one balance rectangle,
 on the Central Market panel**, not two. The two-rectangle cross-check was the
 only thing that could see an occluded read, and it was dropped knowingly: the
 warehouse panel's Withdraw hover overlay covers the last digit group (field,

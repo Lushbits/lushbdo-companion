@@ -132,8 +132,23 @@ recognizer has room, and buttons and counters outside.
 
 It rides the same **Start watching** toggle and the same capture as the loot
 log, because a second capture session would double what the compositor does per
-tick. **Watching is all or nothing**: there is no silver-only mode and no
-per-region switch. To stop watching something, remove its region.
+tick.
+
+### Watch silver only
+
+If the app costs more CPU than you want — on a laptop especially — tick **Watch
+silver only** in the tray. It skips the loot log entirely: nothing is keyed, no
+chat pass ever runs, and the app costs one sampled diff over a small crop per
+tick plus a short read in the seconds a market panel is actually open.
+
+That is where nearly all the cost is. Watching the loot log keys every captured
+frame — a filter over the whole chat rectangle, twice a second, whatever the
+chat is doing — and runs a ~340 ms recogniser pass on a good fraction of ticks.
+The silver rectangle does neither.
+
+Your loot rectangle is kept, so switching back is one click rather than another
+pick. The log says which mode is live when watching starts, so there is no
+guessing.
 
 **Watched regions** lists both rectangles with the size and position each is
 set to, or `not picked yet`. Clicking one picks it again, and each has its own
@@ -164,11 +179,6 @@ one number in the crop, requires it grouped in threes, requires three readings
 to agree, and refuses everything else — including a crop with two numbers in
 it. When it refuses, the figure you already have stands.
 
-**Windows OCR does not read balances.** It reads comma-grouped numbers as
-letters (0 of 1,332 read correctly in the app's own bake-off), so with *Read
-with Windows OCR* ticked the silver rectangle is skipped and the log says so,
-rather than spending passes to confirm nothing.
-
 On Windows 11 the app asks the OS to skip the yellow "this window is being
 captured" border and usually may. On Windows 10 that API does not exist: the
 border around the game window is unavoidable there, same as with OBS.
@@ -183,6 +193,8 @@ border around the game window is unavoidable there, same as with OBS.
 - OCR reads the median-stabilized image at half the capture pace, and only
   when that image actually changed — a still scene costs a few milliseconds
   of arithmetic per tick and no OCR at all.
+- **Watch silver only** turns the expensive half off entirely — see above. It
+  is the setting to reach for when the app costs more than you want.
 - The silver rectangle is gated the opposite way round, on **stillness**:
   two consecutive frames near-identical means a panel is up and worth a look,
   anything else is the moving world and is dropped before any reading. With no
@@ -195,6 +207,15 @@ border around the game window is unavoidable there, same as with OBS.
   practically nothing, so the GC stays quiet.
 - The process runs at below-normal priority: when the game wants the CPU,
   the game wins.
+
+### One prerequisite, and it is almost certainly already there
+
+The recogniser runs on ONNX Runtime, which links the **Microsoft Visual C++
+2015-2022 Redistributable (x64)**. Black Desert installs it, so a machine that
+can run the game this app watches has it. If it is somehow missing, the app
+says so in one sentence and names the fix rather than starting up degraded —
+there used to be a fallback to the OS recogniser, and it was removed because it
+read barely half the loot rows and could not read a silver balance at all.
 
 ### Windows SmartScreen
 
