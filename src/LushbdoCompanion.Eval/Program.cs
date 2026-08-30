@@ -21,6 +21,17 @@ using SkiaSharp;
 //     --tolerant         strip the chat tag box before parsing, so a variant is
 //                        judged on its reading and not on the parser's
 //                        "verb at position 0" rule
+//     --balance          score the silver-balance crops (#22) instead of the
+//                        loot frames: every *-warehouse-*.png / *-marketplace-*.png
+//                        snapshot, read by each engine on the pipeline it
+//                        actually ships with, through the app's own strict
+//                        shape. Scored on **exact match**, not through the
+//                        item_name_key fold — that fold is about confusable
+//                        letters and means nothing for a number, where a
+//                        single wrong digit is the whole failure.
+//     --expect <n>       the true balance in those crops, for --balance to
+//                        score against. Without it the readings are printed
+//                        and nothing is scored.
 //     --engine win|rapid|both   which recognizer reads the variants. `win` is
 //                        Windows.Media.Ocr, what the app ships. `rapid` is
 //                        PaddleOCR PP-OCRv5 (latin) through ONNX Runtime — the
@@ -56,6 +67,8 @@ var maxFrames = int.MaxValue;
 var printRows = false;
 var tolerant = false;
 var simulate = false;
+var balance = false;
+long? expected = null;
 var engines = new[] { "win" };
 var rapidPreset = "default";
 var rapidThreads = 0;
@@ -68,6 +81,8 @@ for (var i = 0; i < args.Length; i++)
         case "--frames": maxFrames = int.Parse(args[++i]); break;
         case "--rows": printRows = true; break;
         case "--simulate": simulate = true; break;
+        case "--balance": balance = true; break;
+        case "--expect": expected = long.Parse(args[++i].Replace(",", "").Replace(".", "")); break;
         case "--tolerant": tolerant = true; break;
         case "--rapid-opts": rapidPreset = args[++i]; break;
         case "--rapid-threads": rapidThreads = int.Parse(args[++i]); break;
@@ -134,7 +149,91 @@ if (engines.Contains("rapid"))
         RapidOcr.GetDefaultSessionOptions(rapidThreads));
 }
 
-var rawFiles = Directory.GetFiles(folder, "*-raw.png").OrderBy(f => f).Take(maxFrames).ToArray();
+if (balance)
+{
+    // The balance crops (#22) are the ones the watcher tagged `-bal` — a
+    // separate corpus in the same folder, and one the loot sweep below skips
+    // for the same reason: a rectangle round four digits says nothing about
+    // reading chat rows.
+    var crops = Directory.GetFiles(folder, "*-bal*.png").OrderBy(f => f).Take(maxFrames).ToArray();
+    if (crops.Length == 0)
+    {
+        Console.Error.WriteLine($"no *-bal*.png balance snapshots under {folder}");
+        return 1;
+    }
+
+    // Each engine reads the crop the way it reads everything else in the app:
+    // PaddleOCR the raw pixels at 1:1, Windows.Media.Ocr the keyed frame at
+    // the 2× enlargement it ships with. Anything else measures a pipeline
+    // nothing runs.
+    var shippedKey = new Key(140, 80, 2, Out.Brightness);
+    var tally = new Dictionary<string, BalanceScore>();
+    foreach (var name in engines) tally[name] = default;
+
+    foreach (var path in crops)
+    {
+        Console.WriteLine($"=== {Path.GetFileName(path)}");
+        var pixels = LoadBgra(path, out var w, out var h);
+        foreach (var engine in engines)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var rows = engine == "rapid"
+                ? ReadRowsRapid(rapidOcr!, pixels, w, h, 1, false, rapidPreset)
+                : await ReadRowsAsync(winOcr, shippedKey.Apply(pixels, w, h), w, h, 2, false);
+            var elapsed = clock.Elapsed.TotalMilliseconds;
+
+            var text = string.Join(' ', rows);
+            var reading = BalanceParser.Parse(text);
+            var score = tally[engine];
+            score.Crops++;
+            score.Millis += elapsed;
+
+            string verdict;
+            if (!reading.Ok)
+            {
+                score.Refused++;
+                verdict = $"refused ({reading.Why})";
+            }
+            else
+            {
+                score.Shaped++;
+                // Exact match, deliberately: the item_name_key fold this
+                // harness scores loot through is about confusable letters and
+                // means nothing for a number, where one wrong digit is the
+                // entire failure.
+                if (expected is not { } want) verdict = "read";
+                else if (reading.Value == want) { score.Exact++; verdict = "EXACT"; }
+                else { score.Wrong++; verdict = $"WRONG (expected {BalanceParser.Money(want)})"; }
+            }
+            tally[engine] = score;
+            Console.WriteLine($"  {engine,-6} {elapsed,5:F0} ms  \"{text}\"  ->  " +
+                              (reading.Ok ? BalanceParser.Money(reading.Value) : "—") + $"   {verdict}");
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"=== balance totals across {crops.Length} crop(s)" +
+                      (expected is { } truth ? $", expecting {BalanceParser.Money(truth)}" : ", nothing to score against"));
+    Console.WriteLine($"  {"engine",-8}{"crops",7}{"shaped",8}{"refused",9}{"exact",7}{"wrong",7}   ms/crop");
+    foreach (var engine in engines)
+    {
+        var t = tally[engine];
+        Console.WriteLine($"  {engine,-8}{t.Crops,7}{t.Shaped,8}{t.Refused,9}{t.Exact,7}{t.Wrong,7}   " +
+                          $"{t.Millis / Math.Max(t.Crops, 1),7:F0}");
+    }
+    // A refusal is the safe direction and a column is enough for it. A figure
+    // that passed the strict shape and is still wrong is the one outcome this
+    // feature may never produce, so it gets said out loud.
+    foreach (var engine in engines)
+        if (tally[engine].Wrong > 0)
+            Console.WriteLine($"  !! {engine} produced {tally[engine].Wrong} shape-valid but WRONG figure(s) — the " +
+                              "strict shape did not catch them, and nothing downstream would either.");
+    return 0;
+}
+
+var rawFiles = Directory.GetFiles(folder, "*-raw.png")
+    .Where(f => !Path.GetFileName(f).Contains("-bal"))
+    .OrderBy(f => f).Take(maxFrames).ToArray();
 if (rawFiles.Length == 0)
 {
     Console.Error.WriteLine($"no *-raw.png snapshots under {folder}");
@@ -499,6 +598,14 @@ static byte[] LoadBgra(string path, out int width, out int height)
 }
 
 record struct Score(int Rows, int Loot, int Named, int Clean, int Good, double Millis);
+
+/// <summary>
+/// One engine's tally over the balance corpus. `Shaped` is what got past the
+/// strict shape and `Exact` is what was actually right — the gap between them
+/// is the number that matters, because a shape-valid wrong figure has nothing
+/// downstream to catch it.
+/// </summary>
+record struct BalanceScore(int Crops, int Shaped, int Refused, int Exact, int Wrong, double Millis);
 
 /// <summary>
 /// One preprocessing recipe. <paramref name="Invert"/> flips the keyed image

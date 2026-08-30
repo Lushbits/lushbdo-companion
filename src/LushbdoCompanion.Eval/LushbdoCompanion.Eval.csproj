@@ -19,6 +19,7 @@
     <Compile Include="..\LushbdoCompanion\TextKeyer.cs" Link="app\TextKeyer.cs" />
     <Compile Include="..\LushbdoCompanion\LineBoard.cs" Link="app\LineBoard.cs" />
     <Compile Include="..\LushbdoCompanion\OcrRows.cs" Link="app\OcrRows.cs" />
+    <Compile Include="..\LushbdoCompanion\BalanceParser.cs" Link="app\BalanceParser.cs" />
   </ItemGroup>
 
   <ItemGroup>

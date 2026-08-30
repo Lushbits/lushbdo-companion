@@ -19,13 +19,17 @@ namespace LushbdoCompanion;
 /// process, never an error loop. The frame pool is drained on a timer, not on
 /// compositor events: between ticks the pool sits full and the compositor
 /// skips us entirely, so capture work is a couple of GPU copies per second
-/// instead of one per rendered frame. The region is cropped on the GPU and
-/// only that chat-sized rectangle is ever read back to the CPU, into a buffer
-/// allocated once. Same passive path as OBS — the game is never touched.
+/// instead of one per rendered frame. The regions are cropped on the GPU and
+/// only those rectangles are ever read back to the CPU, into buffers allocated
+/// once. Several rectangles ride one frame rather than one capture session
+/// each (#22): the session and the pool are the expensive part, and an extra
+/// digit-sized crop off a frame already in hand is another CopyRegion and
+/// another small readback. Same passive path as OBS — the game is never
+/// touched.
 /// </summary>
 public sealed class WgcFrameSource : IFrameSource
 {
-    public event Action<RegionFrame?>? Tick;
+    public event Action<FrameSet?>? Tick;
     public event Action<Exception>? Failed;
     public event Action<string>? Status;
 
@@ -38,21 +42,30 @@ public sealed class WgcFrameSource : IFrameSource
     private GraphicsCaptureSession? _session;
     private System.Threading.Timer? _timer;
     private SizeInt32 _poolSize;
-    private Rectangle _region;              // requested crop, window-relative physical pixels
-    private IntPtr _d3dDevice, _d3dContext, _staging;
-    private Size _stagingSize;
-    private byte[] _pixels = [];
+    private Rectangle[] _regions = [];      // requested crops, window-relative physical pixels
+    private IntPtr _d3dDevice, _d3dContext;
+    private IntPtr[] _staging = [];         // one staging texture per region
+    private Size[] _stagingSize = [];
+    private byte[][] _pixels = [];
+    private RegionFrame?[] _frames = [];    // the tick payload, reused like the buffers inside it
     private int _busy;
     private int _ticksUntilSearch;
     private volatile bool _windowClosed;    // flipped by the capture item's Closed event, acted on at the next tick
     private volatile bool _disposed;
 
-    public async Task StartAsync(Rectangle regionInWindow, TimeSpan pace)
+    public async Task StartAsync(IReadOnlyList<Rectangle> regionsInWindow, TimeSpan pace)
     {
         if (!GraphicsCaptureSession.IsSupported())
             throw new InvalidOperationException("this Windows build cannot do passive screen capture (Windows 10 2004 or newer is needed).");
+        if (regionsInWindow.Count == 0)
+            throw new InvalidOperationException("there is nothing to watch — no region was given.");
 
-        _region = regionInWindow;
+        _regions = [.. regionsInWindow];
+        _staging = new IntPtr[_regions.Length];
+        _stagingSize = new Size[_regions.Length];
+        _pixels = new byte[_regions.Length][];
+        _frames = new RegionFrame?[_regions.Length];
+        for (var i = 0; i < _pixels.Length; i++) _pixels[i] = [];
         _device = CaptureInterop.CreateDirect3DDevice();
         _d3dDevice = CaptureInterop.GetD3DPointer(_device, CaptureInterop.ID3D11Device);
         _d3dContext = CaptureInterop.GetImmediateContext(_d3dDevice);
@@ -225,20 +238,30 @@ public sealed class WgcFrameSource : IFrameSource
             using (frame)
             {
                 var content = frame.ContentSize;
-                var crop = Rectangle.Intersect(_region, new Rectangle(0, 0, content.Width, content.Height));
-                if (crop.Width < 1 || crop.Height < 1)
+                var window = new Rectangle(0, 0, content.Width, content.Height);
+                // One frame, several crops: the texture is fetched once and
+                // every rectangle is copied and read back off it. A rectangle
+                // that fell outside the window this tick is a null slot, not a
+                // dead tick — the others still have something to say.
+                var frameTexture = CaptureInterop.GetD3DPointer(frame.Surface, CaptureInterop.ID3D11Texture2D);
+                try
                 {
-                    Tick?.Invoke(null); // the region fell outside the window (resolution change); keep ticking
+                    for (var i = 0; i < _regions.Length; i++)
+                    {
+                        var crop = Rectangle.Intersect(_regions[i], window);
+                        if (crop.Width < 1 || crop.Height < 1)
+                        {
+                            _frames[i] = null;
+                            continue;
+                        }
+                        EnsureStaging(i, crop.Size);
+                        CaptureInterop.CopyRegion(_d3dContext, _staging[i], frameTexture, crop);
+                        CaptureInterop.ReadTexture(_d3dContext, _staging[i], crop.Width, crop.Height, _pixels[i]);
+                        _frames[i] = new RegionFrame(_pixels[i], crop.Width, crop.Height);
+                    }
                 }
-                else
-                {
-                    EnsureStaging(crop.Size);
-                    var frameTexture = CaptureInterop.GetD3DPointer(frame.Surface, CaptureInterop.ID3D11Texture2D);
-                    try { CaptureInterop.CopyRegion(_d3dContext, _staging, frameTexture, crop); }
-                    finally { Marshal.Release(frameTexture); }
-                    CaptureInterop.ReadTexture(_d3dContext, _staging, crop.Width, crop.Height, _pixels);
-                    Tick?.Invoke(new RegionFrame(_pixels, crop.Width, crop.Height));
-                }
+                finally { Marshal.Release(frameTexture); }
+                Tick?.Invoke(new FrameSet(_frames));
 
                 if (content.Width != _poolSize.Width || content.Height != _poolSize.Height)
                 {
@@ -260,13 +283,13 @@ public sealed class WgcFrameSource : IFrameSource
         }
     }
 
-    private void EnsureStaging(Size size)
+    private void EnsureStaging(int index, Size size)
     {
-        if (size == _stagingSize) return;
-        if (_staging != IntPtr.Zero) Marshal.Release(_staging);
-        _staging = CaptureInterop.CreateStagingTexture(_d3dDevice, size.Width, size.Height);
-        _stagingSize = size;
-        _pixels = new byte[size.Width * size.Height * 4];
+        if (size == _stagingSize[index]) return;
+        if (_staging[index] != IntPtr.Zero) Marshal.Release(_staging[index]);
+        _staging[index] = CaptureInterop.CreateStagingTexture(_d3dDevice, size.Width, size.Height);
+        _stagingSize[index] = size;
+        _pixels[index] = new byte[size.Width * size.Height * 4];
     }
 
     // --- The yellow capture border ------------------------------------------
@@ -323,7 +346,8 @@ public sealed class WgcFrameSource : IFrameSource
 
         _session?.Dispose();
         _pool?.Dispose();
-        if (_staging != IntPtr.Zero) Marshal.Release(_staging);
+        foreach (var staging in _staging)
+            if (staging != IntPtr.Zero) Marshal.Release(staging);
         if (_d3dContext != IntPtr.Zero) Marshal.Release(_d3dContext);
         if (_d3dDevice != IntPtr.Zero) Marshal.Release(_d3dDevice);
         (_device as IDisposable)?.Dispose();

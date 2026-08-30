@@ -29,6 +29,16 @@ namespace LushbdoCompanion;
 /// frame's word. The source owns the game window's lifecycle; a gap in
 /// frames means the game went away, and what follows one is a fresh
 /// baseline.
+///
+/// Since #22 the same capture also carries the silver-balance rectangles,
+/// cropped off the same compositor frame and handed to
+/// <see cref="BalanceBoard"/> — which gates on stillness rather than on keyed
+/// change, for the reasons on that class. They ride this watcher rather than a
+/// second capture session because a second session doubles the compositor's
+/// work per tick, and they share the one OCR slot rather than adding to it:
+/// the loot region asks first, and a balance is read on the ticks the chat did
+/// not need. A chat busy enough to want every pass is a chat nobody is reading
+/// their warehouse during.
 /// </summary>
 public sealed class LootWatcher : IDisposable
 {
@@ -51,7 +61,16 @@ public sealed class LootWatcher : IDisposable
     private readonly TextKeyer _keyer = new();
     private readonly IOcrReader _reader;
     private readonly LineBoard _board;
+    private readonly BalanceBoard _balance;
     private readonly Stopwatch _sinceLastLogged = Stopwatch.StartNew();
+
+    // The balance rectangles, as asked for and then as actually watched. They
+    // are dropped rather than watched when the recognizer cannot hold grouped
+    // digits — see IOcrReader.ReadsGroupedDigits.
+    private readonly (BalanceBoard.Panel Panel, Rectangle Rect)[] _balanceRequested;
+    private BalanceBoard.Panel[] _balancePanels = [];
+    private byte[][] _balanceInput = [];   // one OCR input buffer per watched balance region
+    private TextKeyer? _balanceKeyer;      // only if the reader asked for keyed pixels
 
     private int _frameWidth;
     private int _frameHeight;
@@ -65,6 +84,8 @@ public sealed class LootWatcher : IDisposable
     private int _traceDumps;
     private const int TraceDumpEveryPasses = 20;  // one snapshot set ~every 20 s of activity
     private const int TraceDumpCap = 60;          // 2 PNGs per set; ≤ ~50 MB per session
+    private int _balanceDumps;
+    private const int BalanceDumpCap = 40;        // one small PNG per balance read; the crops are tiny
     private long _framesCaptured;
     private long _ocrPasses;
     private long _pickups;
@@ -77,7 +98,8 @@ public sealed class LootWatcher : IDisposable
     private volatile bool _disposed;
 
     public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null,
-        IFrameSource? source = null, IOcrReader? reader = null)
+        IFrameSource? source = null, IOcrReader? reader = null,
+        IReadOnlyList<(BalanceBoard.Panel Panel, Rectangle Rect)>? balanceRegions = null)
     {
         _region = region;
         _log = log;
@@ -85,6 +107,8 @@ public sealed class LootWatcher : IDisposable
         _source = source ?? new WgcFrameSource();
         _reader = reader ?? new PaddleOcrReader();
         _board = new LineBoard(OnConfirmedPickup, OnBoardNote, Trace);
+        _balance = new BalanceBoard(OnBoardNote, Trace);
+        _balanceRequested = balanceRegions is null ? [] : [.. balanceRegions];
     }
 
     /// <summary>
@@ -209,24 +233,44 @@ public sealed class LootWatcher : IDisposable
     {
         await _reader.StartAsync(_region.Width, _region.Height);
 
+        // The balance rectangles ride the same capture, but only if this
+        // recognizer can hold a grouped number at all. On one that cannot,
+        // every strict-shape check would refuse and the passes would buy
+        // nothing — so say so once instead of spending them.
+        var balance = _balanceRequested;
+        if (balance.Length > 0 && !_reader.ReadsGroupedDigits)
+        {
+            Log($"Silver balance regions are not read by {_reader.Name} — it reads comma-grouped numbers as letters " +
+                "(0 of 1,332 read correctly in the #18 bake-off), so nothing would ever confirm. Switch off " +
+                "\"Read with Windows OCR\" to have your silver read.");
+            balance = [];
+        }
+        _balancePanels = [.. balance.Select(b => b.Panel)];
+        _balanceInput = new byte[balance.Length][];
+        for (var i = 0; i < _balanceInput.Length; i++) _balanceInput[i] = [];
+        if (balance.Length > 0 && _reader.ReadsKeyed) _balanceKeyer = new TextKeyer();
+
         _source.Tick += OnTick;
         _source.Failed += OnFailed;
         _source.Status += Log;
-        await _source.StartAsync(_region, FramePace);
+        // Slot 0 is the loot log; the balance rectangles follow in menu order.
+        await _source.StartAsync([_region, .. balance.Select(b => b.Rect)], FramePace);
     }
 
-    private void OnTick(RegionFrame? tick)
+    private void OnTick(FrameSet? tick)
     {
         try
         {
             if (_disposed) return;
-            if (tick is { } frame)
+            if (tick is { } set && set[0] is { } frame)
             {
                 if (_nullTicks >= FrameGapTicks && _framesCaptured > 0)
                 {
                     // The game went away and came back (restart, minimize) —
-                    // whatever the chat shows now may already be counted.
+                    // whatever the chat shows now may already be counted, and
+                    // whatever a balance panel was half-agreeing on is gone.
                     _resetReason = "the game window was gone for a while";
+                    _balance.Reset("the game window was gone for a while");
                 }
                 _nullTicks = 0;
                 ReadFrame(frame);
@@ -235,11 +279,22 @@ public sealed class LootWatcher : IDisposable
             {
                 _nullTicks++;
             }
+
+            // The balance rectangles ask second, and only ever get the OCR
+            // slot the chat left alone: the loot log is what this app is for.
+            if (tick is { } crops)
+                for (var i = 0; i < _balancePanels.Length; i++)
+                    if (crops[i + 1] is { } crop) ObserveBalance(i, crop);
+
             if (_sinceLastLogged.Elapsed >= HeartbeatEvery)
             {
                 Log(_framesCaptured == 0
                     ? "Still here — no game window captured yet."
-                    : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed.");
+                    : $"Still watching — {_framesCaptured} frames, {_ocrPasses} OCR passes, {_pickups} pickups confirmed." +
+                      (_balancePanels.Length == 0
+                          ? ""
+                          : $" Silver: {_balance.Reads} reads, {_balance.Confirmations} confirmed" +
+                            (_balance.Confirmed is { } silver ? $", newest {BalanceParser.Money(silver)}." : ".")));
                 _sinceLastLogged.Restart();
             }
         }
@@ -257,6 +312,10 @@ public sealed class LootWatcher : IDisposable
             _announced = true;
             Log($"Capture is live: {frame.Width}×{frame.Height}px region, read by {_reader.Name}" +
                 " — text keyed per frame, and read only when it changes.");
+            if (_balancePanels.Length > 0)
+                Log($"Also watching {string.Join(" and ", _balancePanels.Select(p => p.ToString().ToLowerInvariant()))} " +
+                    "for your silver balance, off the same capture — read only while a panel is open and standing " +
+                    "still, and never sent anywhere.");
             _sinceLastLogged.Restart();
         }
 
@@ -362,6 +421,95 @@ public sealed class LootWatcher : IDisposable
             Volatile.Write(ref _ocrBusy, 0);
             // Dispose could not take the reader while this pass held the flag.
             if (_disposed) DisposeReader();
+        }
+    }
+
+    /// <summary>
+    /// One balance rectangle's tick. The gate runs on every one of them and is
+    /// deliberately the cheap half — a sampled diff over a digit-sized crop —
+    /// so the steady state of "no panel open" costs arithmetic and no reading
+    /// at all. A read is only ever taken on a tick the loot log did not want,
+    /// and a picture it was not free for is simply looked at again next tick.
+    /// </summary>
+    private void ObserveBalance(int slot, RegionFrame crop)
+    {
+        var panel = _balancePanels[slot];
+        var length = crop.Width * crop.Height * 4;
+        if (!_balance.Observe(panel, crop.Pixels, length)) return;
+
+        if (Interlocked.CompareExchange(ref _ocrBusy, 1, 0) != 0)
+        {
+            if (_trace is not null) Trace($"bal   {panel} wanted a read, but the loot log has the reader");
+            return;
+        }
+        var release = true;
+        try
+        {
+            _balance.TakeRead(panel);
+
+            // Through the same seam as the loot path: the reader states which
+            // buffer it wants and is handed that one. The source reuses its
+            // pixel buffer between ticks, so the copy is taken before the read
+            // goes asynchronous.
+            if (_balanceInput[slot].Length != length) _balanceInput[slot] = new byte[length];
+            var input = _balanceInput[slot];
+            if (_balanceKeyer is { } keyer) keyer.Key(crop.Pixels, crop.Width, crop.Height, input);
+            else crop.Pixels.AsSpan(0, length).CopyTo(input);
+
+            MaybeDumpBalance(panel, input, crop.Width, crop.Height);
+            release = false; // RecognizeBalanceAsync owns the flag now
+            _ = RecognizeBalanceAsync(panel, input, crop.Width, crop.Height);
+        }
+        finally
+        {
+            if (release) Volatile.Write(ref _ocrBusy, 0);
+        }
+    }
+
+    private async Task RecognizeBalanceAsync(BalanceBoard.Panel panel, byte[] input, int width, int height)
+    {
+        try
+        {
+            var pieces = await _reader.ReadAsync(input, width, height);
+            if (_disposed) return;
+
+            // A crop this small can still come back as several fragments — a
+            // `Silver` label above the figure, a coin glyph beside it. They are
+            // merged the same way a chat row's fragments are and handed over as
+            // one line; the strict shape is what decides whether there is a
+            // number in it.
+            var text = string.Join(' ', OcrRows.Merge(pieces).Select(r => r.Text));
+            _balance.Ingest(panel, text);
+        }
+        catch (Exception e)
+        {
+            OnFailed(e);
+        }
+        finally
+        {
+            Volatile.Write(ref _ocrBusy, 0);
+            if (_disposed) DisposeReader();
+        }
+    }
+
+    /// <summary>
+    /// The crop exactly as the recognizer saw it, per read — a balance misread
+    /// has to be answerable from files rather than inferred (#18), and these
+    /// frames are what the eval harness scores on exact match. Trace-only,
+    /// capped; the crops are small enough that every read can have one.
+    /// </summary>
+    private void MaybeDumpBalance(BalanceBoard.Panel panel, byte[] input, int width, int height)
+    {
+        if (_trace is null || _balanceDumps >= BalanceDumpCap) return;
+        try
+        {
+            var buffer = _reader.ReadsKeyed ? "keyed" : "raw";
+            SavePng(input, width, height, $"bal{_balanceDumps:D3}-{panel.ToString().ToLowerInvariant()}-{buffer}");
+            _balanceDumps++;
+        }
+        catch
+        {
+            // A failed snapshot must never take the watcher down.
         }
     }
 

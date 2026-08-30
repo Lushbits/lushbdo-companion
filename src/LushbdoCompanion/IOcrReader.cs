@@ -37,6 +37,19 @@ public interface IOcrReader : IDisposable
     bool ReadsKeyed { get; }
 
     /// <summary>
+    /// Whether a comma-grouped figure survives this reader well enough to be
+    /// worth reading at all. It is not a preference: the same bake-off table
+    /// has `Gold Bar I,OOOG` at 1,332 occurrences and 0 read correctly on
+    /// Windows.Media.Ocr — a grouped number with its digits read as letters,
+    /// which is precisely the silver balance's input (#22). The strict shape
+    /// would refuse every one of those, which is the safe direction but means
+    /// spending passes to confirm nothing. So a reader that cannot hold digits
+    /// is not given the balance rectangles, and the member is told why rather
+    /// than left watching nothing happen.
+    /// </summary>
+    bool ReadsGroupedDigits { get; }
+
+    /// <summary>
     /// Prepare the reader; throws with a member-readable reason if it cannot
     /// run at all (no language pack, no models).
     /// </summary>

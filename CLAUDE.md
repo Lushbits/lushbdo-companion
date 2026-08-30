@@ -32,6 +32,11 @@ same ToS class as streaming software. No feature is worth bending them.
   its ticks and averaged 29% of one core. Reading only the rows that changed
   would halve that again and was tried; it is unsound against the board and
   the reasons are on `FrameDelta`, which now lives with the eval harness.
+  The silver balance (#22) rides the same capture and the same OCR slot, and
+  is gated the *other* way round — the chat's keyed gate is the chat's own
+  contract and would read black forever on an opaque panel, so `BalanceBoard`
+  gates on raw stillness: no panel, no work, and one still picture is read at
+  most six times whatever happens (~65 ms a pass on a digit-sized crop).
   Steady state allocates nothing, and the process runs below normal priority
   so the game always wins the CPU.
 
@@ -94,6 +99,28 @@ run without Windows (parser, keyer, board) is link-compiled into
 `src/LushbdoCompanion.Tests`; `dotnet test src/LushbdoCompanion.Tests` runs
 it.
 
+#22 gave the eyes a second thing to read: the silver balance, from its own
+optional rectangle(s), **written to the log and sent nowhere** — sending is
+#24, itself blocked on the site endpoint (`Lushbits/bdo#664`). Owner ruling:
+the warehouse figure and the marketplace figure are one number shown in two
+places, never two to add. So regions are plural (`Settings.RegionKind`, the
+loot log's four flat keys kept exactly where they were so an existing install
+never re-picks), several crops ride one capture session, and the read goes
+through the same `IOcrReader` seam — which now also states whether grouped
+digits survive it, because Windows.Media.Ocr reads them as letters and is
+therefore not given the balance rectangles at all. `BalanceBoard` is a sibling
+of `LineBoard`, not a mode on it: a balance is a level, not a stream of events.
+Everything about it resolves to stale rather than wrong — a grouping-strict
+shape (which is the only syntactic guard there is against a dropped digit),
+three agreeing readings rather than the board's two, and two panels that
+disagree confirming nothing.
+
+Owner ruling (2026-08-30), closing #22's open question: **watching is all or
+nothing.** There is no silver-only mode and no per-region toggle — one capture
+session serves every rectangle and it is aimed at the loot log. Removing a
+region is how you stop watching it, which is why every region, the loot log
+included, has its own Forget in the tray's `Watched regions` menu.
+
 `src/LushbdoCompanion.Eval` is the offline harness #18 was opened for: it
 replays trace-corpus snapshots through preprocessing variants and both
 recognizers and prints counts, not vibes. Score it through the *site's*
@@ -107,3 +134,9 @@ misreads it *does* make are systematic rather than random — `Ancient Spirit
 Dust` came back as `Ancient. Spirit. Oust` 1160 times in one session and
 correctly zero times — which is why more frames and more voting could not
 close it.
+
+Balance crops are the one thing that fold must *not* be applied to: `--balance`
+scores the `-bal` snapshots on **exact match**, because a fold about confusable
+letters says nothing about a number where one wrong digit is the whole failure.
+Its `wrong` column — shape-valid and still not the true figure, passed in with
+`--expect` — is the only number on that report worth staring at.

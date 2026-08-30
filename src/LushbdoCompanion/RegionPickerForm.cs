@@ -13,12 +13,14 @@ public sealed class RegionPickerForm : Form
 {
     public Rectangle Selection { get; private set; }
 
+    private readonly string _hint;
     private Point _dragStart;
     private Rectangle _dragRect;
     private bool _dragging;
 
-    public RegionPickerForm()
+    public RegionPickerForm(string hint)
     {
+        _hint = hint;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         Bounds = SystemInformation.VirtualScreen;
@@ -92,14 +94,13 @@ public sealed class RegionPickerForm : Form
         base.OnPaint(e);
         var g = e.Graphics;
 
-        const string hint = "Drag a rectangle around the game's loot chat tab — Esc cancels";
         using var hintFont = new Font("Segoe UI", 14f, FontStyle.Bold);
         foreach (var screen in Screen.AllScreens)
         {
-            var size = g.MeasureString(hint, hintFont);
-            g.DrawString(hint, hintFont, Brushes.White, new PointF(
+            var size = g.MeasureString(_hint, hintFont, screen.Bounds.Width - 80);
+            g.DrawString(_hint, hintFont, Brushes.White, new RectangleF(
                 screen.Bounds.X - Bounds.X + (screen.Bounds.Width - size.Width) / 2,
-                screen.Bounds.Y - Bounds.Y + screen.Bounds.Height * 0.12f));
+                screen.Bounds.Y - Bounds.Y + screen.Bounds.Height * 0.12f, size.Width, size.Height));
         }
 
         if (_dragRect.Width <= 0) return;
