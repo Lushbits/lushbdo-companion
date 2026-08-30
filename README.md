@@ -110,6 +110,16 @@ rectangle around. If the game closed the panel when you tabbed away, press Esc
 and the app offers to pick on the live screen after a three-second countdown
 instead.
 
+**The two panels put the figure in different places** — the warehouse at the
+bottom of its panel, the central market at the top of its own — which is why
+there are two rectangles rather than one. A rectangle picked over the warehouse
+sees only scenery when the market is what is open.
+
+Drag it around the digits and as little else as possible. It does not need to
+be tight — extra background costs nothing, and the label beside the figure has
+no digits in it so it cannot confuse anything — but a neighbouring button or
+counter inside the rectangle can and does spoil the read.
+
 Both rectangles are independently optional — pick neither, one, or both. They
 ride the same **Start watching** toggle and the same capture as the loot log,
 because a second capture session would double what the compositor does per

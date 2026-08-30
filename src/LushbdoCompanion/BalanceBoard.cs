@@ -86,9 +86,31 @@ public sealed class BalanceBoard
     /// </summary>
     public const int ReadsPerPicture = 6;
 
+    /// <summary>
+    /// How long one rectangle's last clean reading stays usable as evidence
+    /// against the other's — about ten seconds at the watcher's pace.
+    ///
+    /// This exists because the cross-panel rule was written and then could not
+    /// fire. It asked whether the other rectangle was reading a different
+    /// figure *at that instant*, and the answer was almost always "it is not
+    /// reading anything": a single empty pass or one drift wiped what it had
+    /// last seen. The field showed the cost (2026-08-30 16:02) — one rectangle
+    /// read 23,975,827,939 while the other confirmed 23,975,827, three
+    /// degraded passes agreeing with each other, and nothing compared them.
+    ///
+    /// A reading a few seconds old is still evidence: the balance cannot have
+    /// changed in the meantime without the member doing something that takes
+    /// far longer. Stale evidence ages out rather than being thrown away, and
+    /// while it stands, a contradiction blocks both figures.
+    /// </summary>
+    public const int CrossCheckTicks = 20;
+
     private readonly Action<string> _note;
     private readonly Action<string>? _trace;
     private readonly PanelState[] _panels = [new(Panel.Warehouse), new(Panel.Marketplace)];
+
+    /// <summary>Which rectangle produced the standing figure, so a second one agreeing is visible.</summary>
+    private Panel? _confirmedBy;
 
     public BalanceBoard(Action<string> note, Action<string>? trace = null)
     {
@@ -113,6 +135,16 @@ public sealed class BalanceBoard
     public bool Observe(Panel panel, byte[] pixels, int length)
     {
         var p = State(panel);
+
+        // What this rectangle last read is evidence for a while, not only on
+        // the tick it read it. Ageing it here — every tick, whatever else the
+        // gate decides — is what lets the cross-panel rule actually fire.
+        if (p.LastValue is not null && ++p.LastValueAge > CrossCheckTicks)
+        {
+            p.LastValue = null;
+            p.LastValueAge = 0;
+        }
+
         if (p.Previous.Length != length)
         {
             // First frame, or the region resized under us. There is nothing to
@@ -179,6 +211,7 @@ public sealed class BalanceBoard
         if (reading.Ok)
         {
             p.LastValue = reading.Value;
+            p.LastValueAge = 0;
             p.ValidReads++;
             if (p.PendingValue == reading.Value) p.PendingCount++;
             else
@@ -189,7 +222,10 @@ public sealed class BalanceBoard
         }
         else
         {
-            p.LastValue = null;
+            // LastValue is deliberately left alone: what this rectangle last
+            // read stays evidence against the other one until it ages out. A
+            // panel that has just been closed reads as nothing, and "nothing"
+            // is not a retraction of what it said two seconds ago.
             p.PendingValue = null;
             p.PendingCount = 0;
             // Once per picture: a panel that reads badly reads badly on every
@@ -218,9 +254,12 @@ public sealed class BalanceBoard
         p.Done = true;
 
         // The two panels show one number. Disagreement is proof of a misread,
-        // and the only safe answer is the figure the member already has.
+        // and the only safe answer is the figure the member already has. The
+        // other rectangle does not have to be readable *right now* for its last
+        // reading to contradict this one — see CrossCheckTicks for why that
+        // was the difference between a rule and a rule that fires.
         var other = State(p.Panel == Panel.Warehouse ? Panel.Marketplace : Panel.Warehouse);
-        if (other.StillNow && other.LastValue is { } theirs && theirs != value)
+        if (other.LastValue is { } theirs && theirs != value)
         {
             _note($"balance  the {Name(p.Panel)} rectangle reads {BalanceParser.Money(value)} while the " +
                   $"{Name(other.Panel)} one reads {BalanceParser.Money(theirs)}. They are two views of the same " +
@@ -229,13 +268,23 @@ public sealed class BalanceBoard
         }
 
         Confirmations++;
-        if (Confirmed == value)
+        var sameFigure = Confirmed == value;
+        var otherPanel = _confirmedBy is { } who && who != p.Panel;
+        Confirmed = value;
+        _confirmedBy = p.Panel;
+
+        if (sameFigure && !otherPanel)
         {
             _trace?.Invoke($"bal   {p.Panel} confirmed {value} again — unchanged");
             return;
         }
-        Confirmed = value;
-        _note($"balance  confirmed {BalanceParser.Money(value)} silver from the {Name(p.Panel)} " +
+        // The second rectangle agreeing is the cross-check *passing*, and a
+        // member who has just aimed one deserves to see it work. Silence is
+        // what a re-read of the same picture earns, not a second view of it.
+        _note(sameFigure
+            ? $"balance  the {Name(p.Panel)} rectangle confirms the same {BalanceParser.Money(value)} silver — " +
+              "both views agree."
+            : $"balance  confirmed {BalanceParser.Money(value)} silver from the {Name(p.Panel)} " +
               $"({AgreeingReads} agreeing readings). Nothing is sent — this is the log only.");
     }
 
@@ -296,8 +345,15 @@ public sealed class BalanceBoard
         public long? PendingValue;
         public int PendingCount;
 
-        /// <summary>The last figure this panel parsed cleanly, for the cross-panel check. Null once it refuses.</summary>
+        /// <summary>
+        /// The last figure this rectangle parsed cleanly — evidence against
+        /// the other one until it ages past <see cref="CrossCheckTicks"/>. It
+        /// deliberately survives a refusal and a new picture; only a
+        /// discontinuity or the ageing clears it.
+        /// </summary>
         public long? LastValue;
+
+        public int LastValueAge;
 
         public string LastNote = "";
 
@@ -312,7 +368,6 @@ public sealed class BalanceBoard
             Done = false;
             ReadsThisPicture = 0;
             ValidReads = 0;
-            LastValue = null;
             LastNote = "";
         }
 
@@ -322,6 +377,8 @@ public sealed class BalanceBoard
             NewPicture();
             PendingValue = null;
             PendingCount = 0;
+            LastValue = null;
+            LastValueAge = 0;
         }
     }
 }

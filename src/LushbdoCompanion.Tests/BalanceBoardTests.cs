@@ -131,6 +131,82 @@ public class BalanceBoardTests
         Assert.Contains(_notes, n => n.Contains("one of them is misread"));
     }
 
+    /// <summary>
+    /// The rule had to survive the other rectangle going quiet, or it never
+    /// fired at all. Field case (2026-08-30 16:02): one rectangle read
+    /// 23,975,827,939, then read nothing for a few ticks as its panel drifted,
+    /// and meanwhile the other confirmed the same figure with its last group
+    /// truncated. Nothing compared them, because "reads nothing right now"
+    /// counted as "has nothing to say".
+    /// </summary>
+    [Fact]
+    public void AQuietPanelStillContradictsTheOtherOne()
+    {
+        var board = NewBoard();
+        var market = Picture(90);
+        var warehouse = Picture(50);
+        Settle(board, BalanceBoard.Panel.Marketplace, market);
+        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
+
+        Read(board, BalanceBoard.Panel.Marketplace, market, "23,975,827,939");
+        // Its panel drifts away and it reads nothing for a while — which is not
+        // a retraction of what it just said.
+        for (var i = 0; i < 3; i++) Read(board, BalanceBoard.Panel.Marketplace, market, "");
+
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
+            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "Warehouse Bé Withd 23,975,827");
+
+        Assert.Null(board.Confirmed);
+        Assert.Contains(_notes, n => n.Contains("one of them is misread"));
+    }
+
+    /// <summary>
+    /// ...but only for a while. A reading old enough that the balance could
+    /// legitimately have moved on is not evidence any more, and must not block
+    /// the other rectangle forever.
+    /// </summary>
+    [Fact]
+    public void StaleEvidenceAgesOutAndStopsBlocking()
+    {
+        var board = NewBoard();
+        var market = Picture(90);
+        var warehouse = Picture(50);
+        Settle(board, BalanceBoard.Panel.Marketplace, market);
+        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
+        Read(board, BalanceBoard.Panel.Marketplace, market, "1,000,000");
+
+        for (var i = 0; i <= BalanceBoard.CrossCheckTicks; i++)
+            board.Observe(BalanceBoard.Panel.Marketplace, market, Length);
+
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
+            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "2,000,000");
+
+        Assert.Equal(2_000_000L, board.Confirmed);
+    }
+
+    /// <summary>
+    /// The cross-check passing is worth a log line. It used to be trace-only,
+    /// so a member who had just aimed a second rectangle saw silence and read
+    /// it as the rectangle not working.
+    /// </summary>
+    [Fact]
+    public void TheSecondRectangleAgreeingIsSaidOutLoud()
+    {
+        var board = NewBoard();
+        var warehouse = Picture(50);
+        var market = Picture(90);
+        Settle(board, BalanceBoard.Panel.Warehouse, warehouse);
+        Settle(board, BalanceBoard.Panel.Marketplace, market);
+
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
+            Read(board, BalanceBoard.Panel.Warehouse, warehouse, "1,000,000");
+        for (var i = 0; i < BalanceBoard.AgreeingReads; i++)
+            Read(board, BalanceBoard.Panel.Marketplace, market, "1,000,000");
+
+        Assert.Equal(1_000_000L, board.Confirmed);
+        Assert.Contains(_notes, n => n.Contains("both views agree"));
+    }
+
     /// <summary>Two panels showing the same figure are agreement, not a contradiction.</summary>
     [Fact]
     public void TwoPanelsThatAgreeConfirm()
