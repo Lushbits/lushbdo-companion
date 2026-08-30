@@ -98,7 +98,8 @@ public sealed class LootWatcher : IDisposable
     private volatile bool _disposed;
 
     public LootWatcher(Rectangle region, Action<string> log, Action<string, int>? onLoot = null,
-        IFrameSource? source = null, IOcrReader? reader = null, Rectangle? balanceRegion = null)
+        IFrameSource? source = null, IOcrReader? reader = null, Rectangle? balanceRegion = null,
+        Action<long>? onBalance = null)
     {
         _region = region;
         _log = log;
@@ -106,7 +107,7 @@ public sealed class LootWatcher : IDisposable
         _source = source ?? new WgcFrameSource();
         _reader = reader ?? new PaddleOcrReader();
         _board = new LineBoard(OnConfirmedPickup, OnBoardNote, Trace);
-        _balance = new BalanceBoard(OnBoardNote, Trace);
+        _balance = new BalanceBoard(OnBoardNote, Trace, onBalance);
         _balanceRequested = balanceRegion;
     }
 

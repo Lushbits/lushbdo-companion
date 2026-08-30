@@ -26,6 +26,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _forgetItems = [];
     private LootWatcher? _watcher;
     private LootSender? _sender;
+    private SilverSender? _silver;
     private bool _updateBalloonShown;
 
     public TrayContext()
@@ -364,42 +365,60 @@ public sealed class TrayContext : ApplicationContext
         if (_watcher is not null || _settings.RegionFor(Settings.RegionKind.Loot) is not { } region) return;
 
         LootSender? sender = null;
+        SilverSender? silver = null;
         if (_settings.IsPaired)
         {
             // Revoked fires on a worker thread; the menu and balloon live on
             // this one.
             var ui = SynchronizationContext.Current;
-            sender = new LootSender(_client, msg =>
+            void Say(string msg)
             {
                 _log.Append(msg);
                 _watcher?.TraceExternal(msg); // sender lines belong in a traced session too
-            });
-            sender.Revoked += why => ui?.Post(_ =>
+            }
+            void OnRevoked(string why) => ui?.Post(_ =>
             {
                 StopWatching("Watching stopped — the site rejected this device's token. Pair again from the site's " +
                              "Devices page, then paste the new token in Settings.");
                 _icon.ShowBalloonTip(10_000, "Lushbdo Companion",
-                    "The site rejected this device's token — loot is no longer being sent.", ToolTipIcon.Warning);
+                    "The site rejected this device's token — nothing is being sent.", ToolTipIcon.Warning);
             }, null);
+
+            sender = new LootSender(_client, Say);
+            sender.Revoked += OnRevoked;
+
+            // One credential opens both routes (bdo#668), so a revoked token
+            // stops the balance the same way it stops the loot, and says so
+            // once between them.
+            if (_settings.BalanceRegion is not null)
+            {
+                silver = new SilverSender(_client, Say);
+                silver.Revoked += OnRevoked;
+            }
         }
         else
         {
             _log.Append("Not paired — reading the loot log but sending nothing. Paste a device token in Settings to feed your sessions.");
         }
 
-        var watcher = await StartWatcherAsync(region, sender);
+        var watcher = await StartWatcherAsync(region, sender, silver);
         if (watcher is null)
         {
             sender?.Dispose();
+            silver?.Dispose();
             return;
         }
 
         _watcher = watcher;
         _sender = sender;
+        _silver = silver;
         if (_settings.TraceOcr) watcher.SetTracing(true);
         _watchItem.Text = "Stop watching";
         _log.Append("Watching the loot log. New pickups are confirmed across frames, then sent to your running gather " +
                     "session in small batches — start one on the site and play.");
+        if (_silver is not null)
+            _log.Append("Your silver balance is sent too, whenever a confirmed figure differs from the one the site " +
+                        "already has — no gather session needed for that one.");
         ShowLog();
     }
 
@@ -411,7 +430,7 @@ public sealed class TrayContext : ApplicationContext
     /// practice" is not a thing to fail a member's session over, though, so a
     /// machine without it reads a little worse instead of not reading.
     /// </summary>
-    private async Task<LootWatcher?> StartWatcherAsync(Rectangle region, LootSender? sender)
+    private async Task<LootWatcher?> StartWatcherAsync(Rectangle region, LootSender? sender, SilverSender? silver)
     {
         var order = _settings.UseWindowsOcr ? new[] { "windows" } : new[] { "paddle", "windows" };
         foreach (var which in order)
@@ -447,6 +466,8 @@ public sealed class TrayContext : ApplicationContext
         _watcher = null;
         _sender?.Dispose();
         _sender = null;
+        _silver?.Dispose();
+        _silver = null;
         _watchItem.Text = "Start watching";
         _log.Append(message);
     }
@@ -546,6 +567,7 @@ public sealed class TrayContext : ApplicationContext
     {
         _watcher?.Dispose();
         _sender?.Dispose();
+        _silver?.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
         Application.Exit();

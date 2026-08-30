@@ -6,9 +6,12 @@ using System.Text.Json.Serialization;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The one conversation this app has with the site: POST a batch of loot lines
-/// to /gather/ingest and read back what happened to each. The contract is the
-/// server's; nothing here interprets a line beyond carrying it.
+/// The two conversations this app has with the site: a batch of loot lines to
+/// /gather/ingest, and a silver balance to /silver/record. The contract is the
+/// server's; nothing here interprets what it carries.
+///
+/// One credential opens both — the site's own ruling (bdo#668), so a member who
+/// has already paired posts balances without minting or pasting anything.
 /// </summary>
 public sealed class IngestClient(Settings settings)
 {
@@ -57,6 +60,32 @@ public sealed class IngestClient(Settings settings)
 
     public sealed record Result(bool Ok, int Status, string? Error, IngestAnswer? Answer);
 
+    /// <summary>
+    /// The whole balance, which is the only thing this route takes. The site's
+    /// column means the member's entire liquid silver and is read as that by
+    /// the sheet total, the goal bar and bdo#663's series, so a partial figure
+    /// posted here would make one column mean two things. A device that cannot
+    /// establish it reads the whole figure must not post at all — that ruling
+    /// is the route's, and #22's owner answered it for this app in the field.
+    /// </summary>
+    public sealed record SilverRecord([property: JsonPropertyName("silver")] long Silver);
+
+    /// <summary>
+    /// `stored:false` with `reason:"unchanged"` is a success, not a refusal —
+    /// the figure already stood and the site deliberately wrote nothing. That
+    /// is also what makes the route idempotent without an id: a redelivered
+    /// *level* is the same claim rather than a second one.
+    /// </summary>
+    public sealed record SilverAnswer(
+        [property: JsonPropertyName("silver")] long Silver,
+        [property: JsonPropertyName("stored")] bool Stored,
+        [property: JsonPropertyName("reason")] string? Reason);
+
+    public sealed record SilverResult(
+        bool Ok, int Status, string? Error, SilverAnswer? Answer, TimeSpan? RetryAfter);
+
+    private sealed record Fault([property: JsonPropertyName("error")] string? Error);
+
     public async Task<Result> SendAsync(Batch batch, CancellationToken ct = default)
     {
         var token = settings.Token;
@@ -89,6 +118,73 @@ public sealed class IngestClient(Settings settings)
         catch (HttpRequestException e)
         {
             return new Result(false, 0, $"Could not reach the site: {e.Message}", null);
+        }
+    }
+
+    /// <summary>
+    /// Record the member's whole liquid silver. Unlike a loot batch this is a
+    /// *level*: redelivering it asserts the same thing rather than a second
+    /// thing, so there is no batch id and no idempotency ring.
+    /// </summary>
+    public async Task<SilverResult> RecordSilverAsync(long silver, CancellationToken ct = default)
+    {
+        var token = settings.Token;
+        if (token.Length == 0)
+            return new SilverResult(false, 0, "No token — open Settings and paste one from the site's Devices page.", null, null);
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{settings.BaseUrl.TrimEnd('/')}/silver/record");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Content = JsonContent.Create(new SilverRecord(silver));
+
+            using var response = await Http.SendAsync(request, ct);
+            var status = (int)response.StatusCode;
+
+            if (status == 401) return new SilverResult(false, status, "The site does not recognise this token — it may have been revoked. Pair again from Settings → Devices.", null, null);
+            if (status == 403) return new SilverResult(false, status, "This token is not a device token.", null, null);
+
+            if (status == 503)
+            {
+                // The deploy-ahead-of-migration window the route documents. It
+                // says how long to wait; honour it rather than guessing.
+                var after = response.Headers.RetryAfter?.Delta
+                            ?? (response.Headers.RetryAfter?.Date is { } at ? at - DateTimeOffset.UtcNow : null);
+                return new SilverResult(false, status,
+                    await FaultAsync(response, ct) ?? "The site is still migrating.", null,
+                    after is { TotalSeconds: > 0 } wait ? wait : TimeSpan.FromSeconds(60));
+            }
+
+            if (!response.IsSuccessStatusCode)
+                return new SilverResult(false, status,
+                    await FaultAsync(response, ct) ?? $"The site answered HTTP {status}.", null, null);
+
+            var answer = await response.Content.ReadFromJsonAsync<SilverAnswer>(cancellationToken: ct);
+            return answer is null
+                ? new SilverResult(false, status, "The site answered something this version cannot read.", null, null)
+                : new SilverResult(true, status, null, answer, null);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new SilverResult(false, 0, "The site did not answer within 30 seconds.", null, null);
+        }
+        catch (HttpRequestException e)
+        {
+            return new SilverResult(false, 0, $"Could not reach the site: {e.Message}", null, null);
+        }
+    }
+
+    /// <summary>The site names the rule a payload broke; carry its words rather than inventing any.</summary>
+    private static async Task<string?> FaultAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var fault = await response.Content.ReadFromJsonAsync<Fault>(cancellationToken: ct);
+            return string.IsNullOrWhiteSpace(fault?.Error) ? null : fault.Error;
+        }
+        catch
+        {
+            return null; // not JSON, or not a shape this version knows
         }
     }
 
