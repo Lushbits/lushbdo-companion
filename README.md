@@ -123,7 +123,8 @@ counter inside the rectangle can and does spoil the read.
 Both rectangles are independently optional — pick neither, one, or both. They
 ride the same **Start watching** toggle and the same capture as the loot log,
 because a second capture session would double what the compositor does per
-tick.
+tick. **Watching is all or nothing**: there is no silver-only mode and no
+per-region switch. To stop watching something, remove its region.
 
 **Watched regions** lists all three with the size and position each is set to,
 or `not picked yet`. Clicking one picks it again, and each has its own

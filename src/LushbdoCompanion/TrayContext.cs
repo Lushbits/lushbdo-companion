@@ -293,10 +293,11 @@ public sealed class TrayContext : ApplicationContext
         _log.Append($"Region · {RegionName(kind)} set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
         if (!_watchItem.Enabled)
         {
-            // One capture session serves every rectangle and it is aimed at
-            // the loot log; silver rides along rather than watching on its own.
-            _log.Append("Your silver will be read once a loot log region is picked too — one capture serves both, " +
-                        "and it starts from the loot log.");
+            // Owner ruling (#22, 2026-08-30): watching is all or nothing.
+            // Silver rides the loot log's capture and does not watch on its
+            // own; stopping is what removing a region is for.
+            _log.Append("Your silver will be read once a loot log region is picked too — watching is all or " +
+                        "nothing, and one capture serves every rectangle.");
             return;
         }
         await StartWatchingAsync(); // picking a region is the intent to watch it
@@ -312,6 +313,13 @@ public sealed class TrayContext : ApplicationContext
     /// deciding what a member is allowed to change about their own setup, and
     /// the consequence — watching stops until one is picked again — is theirs
     /// to weigh and is said plainly rather than prevented.
+    ///
+    /// It is also the documented way to stop watching one thing. Owner ruling
+    /// (#22, 2026-08-30): watching is **all or nothing**, there is no
+    /// silver-only mode and no per-region toggle, and removing the region is
+    /// what turns a rectangle off. That closes the issue's open question about
+    /// whether the balance should ride the same toggle — it does, and this
+    /// menu is the whole of the control surface.
     /// </summary>
     private async Task ForgetRegionAsync(Settings.RegionKind kind)
     {
@@ -329,11 +337,11 @@ public sealed class TrayContext : ApplicationContext
 
         if (kind == Settings.RegionKind.Loot)
         {
-            // One capture session serves every rectangle and it is aimed at
-            // the loot log, so silver cannot be watched on its own yet — #22's
-            // own open question, and the answer to it is not this menu.
-            _log.Append("Watching is off until a loot log region is picked again — one capture serves every " +
-                        "rectangle, and it starts from the loot log.");
+            // Owner ruling (#22, 2026-08-30): watching is all or nothing, and
+            // dropping a region is how you stop watching it. So this is the
+            // documented way out, not a gap.
+            _log.Append("Watching is off until a loot log region is picked again — watching is all or nothing, " +
+                        "and one capture serves every rectangle.");
             return;
         }
         if (wasWatching) await StartWatchingAsync();

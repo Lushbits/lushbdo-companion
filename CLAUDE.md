@@ -115,6 +115,12 @@ shape (which is the only syntactic guard there is against a dropped digit),
 three agreeing readings rather than the board's two, and two panels that
 disagree confirming nothing.
 
+Owner ruling (2026-08-30), closing #22's open question: **watching is all or
+nothing.** There is no silver-only mode and no per-region toggle — one capture
+session serves every rectangle and it is aimed at the loot log. Removing a
+region is how you stop watching it, which is why every region, the loot log
+included, has its own Forget in the tray's `Watched regions` menu.
+
 `src/LushbdoCompanion.Eval` is the offline harness #18 was opened for: it
 replays trace-corpus snapshots through preprocessing variants and both
 recognizers and prints counts, not vibes. Score it through the *site's*
