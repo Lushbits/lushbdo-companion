@@ -77,7 +77,15 @@ public sealed class Settings
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+            {
+                var json = File.ReadAllText(FilePath);
+                var settings = JsonSerializer.Deserialize<Settings>(json) ?? new Settings();
+                // Rewriting now is the scrub: nothing else here saves unless the
+                // member opens Settings or switches recognizer, and a plaintext
+                // credential must not wait on that.
+                if (HasPlaintextToken(json)) settings.Save();
+                return settings;
+            }
         }
         catch
         {
@@ -86,12 +94,40 @@ public sealed class Settings
         return new Settings();
     }
 
+    /// <summary>
+    /// Builds through 0.5.0 serialized <see cref="Token"/> next to its own
+    /// protected form, so the credential also sat in the file in plaintext.
+    /// The property is ignored now, but the key is still on disk on every
+    /// install that ever paired, and finding it is what forces the rewrite
+    /// that drops it. The plaintext is not read back: <see cref="TokenProtected"/>
+    /// carries the pairing forward on the machine that made it, and on any
+    /// other machine the copied file is meant to be worth nothing.
+    /// </summary>
+    private static bool HasPlaintextToken(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("Token", out _);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public void Save()
     {
         Directory.CreateDirectory(Dir);
         File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
     }
 
+    /// <summary>
+    /// Never serialized: persisting this would write the credential in
+    /// plaintext beside the protected copy it decrypts from.
+    /// </summary>
+    [JsonIgnore]
     public string Token
     {
         get
@@ -115,5 +151,6 @@ public sealed class Settings
         }
     }
 
+    [JsonIgnore]
     public bool IsPaired => TokenProtected.Length > 0 && Token.Length > 0;
 }
