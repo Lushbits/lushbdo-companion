@@ -94,7 +94,7 @@ public sealed class TrayContext : ApplicationContext
         _icon = new NotifyIcon
         {
             Icon = _appIcon ?? SystemIcons.Application,
-            Text = $"Lushbdo Companion {UpdateChecker.Current.ToString(3)}",
+            Text = $"LushBDO Companion {UpdateChecker.Current.ToString(3)}",
             ContextMenuStrip = menu,
             Visible = true
         };
@@ -103,7 +103,7 @@ public sealed class TrayContext : ApplicationContext
 
         RefreshRegionMenu();
 
-        _log.Append($"Lushbdo Companion {UpdateChecker.Current.ToString(3)} started.");
+        _log.Append($"LushBDO Companion {UpdateChecker.Current.ToString(3)} started.");
         _log.Append(_settings.IsPaired
             ? $"Paired. Site: {_settings.BaseUrl}"
             : "Not paired yet — open Settings and paste a device token from the site's Devices page.");
@@ -215,7 +215,7 @@ public sealed class TrayContext : ApplicationContext
             "The game may close it when you tab away. Pick on the live screen instead — you get three seconds to " +
             "switch to the game with the panel open." + Environment.NewLine + Environment.NewLine +
             $"Yes: pick {RegionName(kind).ToLowerInvariant()} on the live screen.   No: cancel.",
-            "Lushbdo Companion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+            "LushBDO Companion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
 
     private async Task PickRegionAsync(Settings.RegionKind kind)
     {
@@ -382,7 +382,7 @@ public sealed class TrayContext : ApplicationContext
             {
                 StopWatching("Watching stopped — the site rejected this device's token. Pair again from the site's " +
                              "Devices page, then paste the new token in Settings.");
-                _icon.ShowBalloonTip(10_000, "Lushbdo Companion",
+                _icon.ShowBalloonTip(10_000, "LushBDO Companion",
                     "The site rejected this device's token — nothing is being sent.", ToolTipIcon.Warning);
             }, null);
 
@@ -548,7 +548,7 @@ public sealed class TrayContext : ApplicationContext
             if (manual || !_updateBalloonShown)
             {
                 _updateBalloonShown = true;
-                _icon.ShowBalloonTip(10_000, "Lushbdo Companion",
+                _icon.ShowBalloonTip(10_000, "LushBDO Companion",
                     $"Version {check.LatestVersion} is available — click to download.", ToolTipIcon.Info);
             }
             if (manual) OpenReleasesPage();

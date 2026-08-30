@@ -1,4 +1,4 @@
-# Lushbdo Companion
+# LushBDO Companion
 
 A Windows tray app that watches Black Desert Online's loot log with passive
 screen capture and OCR, and feeds what you gather into your running session on
