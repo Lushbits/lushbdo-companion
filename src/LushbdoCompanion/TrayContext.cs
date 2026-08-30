@@ -10,6 +10,7 @@ namespace LushbdoCompanion;
 public sealed class TrayContext : ApplicationContext
 {
     private readonly NotifyIcon _icon;
+    private readonly Icon? _appIcon;
     private readonly Settings _settings;
     private readonly IngestClient _client;
     private readonly LogWindow _log = new();
@@ -88,9 +89,10 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
 
+        _appIcon = AppIcon.Tray();
         _icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = _appIcon ?? SystemIcons.Application,
             Text = $"Lushbdo Companion {UpdateChecker.Current.ToString(3)}",
             ContextMenuStrip = menu,
             Visible = true
@@ -548,6 +550,7 @@ public sealed class TrayContext : ApplicationContext
         _sender?.Dispose();
         _icon.Visible = false;
         _icon.Dispose();
+        _appIcon?.Dispose(); // NotifyIcon does not own the icon it was handed
         Application.Exit();
     }
 }

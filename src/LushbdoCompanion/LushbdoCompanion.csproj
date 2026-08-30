@@ -17,6 +17,11 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Version>0.5.0</Version>
+    <!-- The site's own L mark. This is the icon the shell shows for the file
+         itself — Explorer, the taskbar, the SmartScreen dialog — and it can
+         only come from a file on disk, so it is separate from the embedded
+         copy AppIcon loads for the tray. -->
+    <ApplicationIcon>lushbdo.ico</ApplicationIcon>
     <AssemblyTitle>Lushbdo Companion</AssemblyTitle>
     <Product>Lushbdo Companion</Product>
     <!-- Self-contained single file keeps "download the app" one .exe: the
@@ -31,6 +36,12 @@
          loose DLLs beside the exe and break the one-file release. -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ...and the same file again, inside the exe, because the tray icon is
+         set at runtime and the release stays one download. -->
+    <EmbeddedResource Include="lushbdo.ico" LogicalName="LushbdoCompanion.lushbdo.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- DPAPI, so the paired token is not plaintext on disk. -->
