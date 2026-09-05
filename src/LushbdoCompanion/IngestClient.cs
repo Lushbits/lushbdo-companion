@@ -37,9 +37,9 @@ public sealed class IngestClient(Settings settings)
     /// The run a batch landed on. `elapsedSec` is gathering time — since
     /// Start, less every break — the figure the site's own clock shows.
     /// `liveSinceSec` is how long ago the session last went live: Start, or
-    /// the latest Resume. It is what the pool cuts at, and a site that does
-    /// not send it yet gets `elapsedSec` as the stand-in (Lushbits/bdo issue
-    /// filed 2026-09-05).
+    /// the latest Resume, and null while paused. It is what the pool cuts at
+    /// (bdo#707, shipped in bdo#708); a site from before it gets `elapsedSec`
+    /// as the stand-in.
     /// </summary>
     public sealed record SessionInfo(
         [property: JsonPropertyName("id")] string Id,
