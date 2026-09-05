@@ -6,43 +6,52 @@ namespace LushbdoCompanion;
 ///
 /// Pure on purpose — no clock, no network — because what it decides is about
 /// *time*, and that is what the tests have to be able to say. A pickup is an
-/// event at an instant; a gather session is a span the member opens with
-/// Start on the site; and the loot that counts is the loot picked up inside
-/// the span. Nothing else does. The sender used to hold what it read while no
-/// session ran and deliver all of it the moment one started, so a session
-/// opened after an afternoon's grinding began with the afternoon on it (owner,
-/// 2026-09-05). The site leaves this to the app on purpose — a `no-session`
-/// batch is answered and not claimed, so an app that re-posts it has it land —
-/// which is why the rule has to live on this side.
+/// event at an instant; a gather session is live between Start and Stop, less
+/// every break the member takes with Pause; and the loot that counts is the
+/// loot picked up while the session was live. Nothing else does — not what
+/// came before Start, and not what an alt looted from a boss while the run
+/// stood paused (owner, 2026-09-05). The sender used to hold what it read
+/// while no session ran and deliver all of it the moment one started, so a
+/// session opened after an afternoon's grinding began with the afternoon on
+/// it. The site leaves the first half of this to the app on purpose — a
+/// `no-session` batch is answered and not claimed, so an app that re-posts it
+/// has it land — and does the second half itself, claiming a `paused` batch
+/// and filing nothing. What is left is the loot the app has *not yet posted*
+/// when the session goes live, and that is this class's job.
 ///
-/// The app cannot ask the site whether a session runs: an empty batch is
-/// refused, and a `no-session` answer carries no session. So it learns the
-/// two facts it can, each from an answer it already gets, and each is a cut
-/// on the pool:
+/// The app cannot see the session: an answer is the only word it gets. So it
+/// learns the two facts an answer can carry, and each is a cut on the pool:
 ///
-///   - **`no-session`** at the instant a batch was sent means no session was
-///     open then, so any session that opens later opens after that instant.
-///     Everything in the parcel, and every pending pickup seen before the
-///     send, is loot from outside any session and is dropped. A pickup seen
-///     after the send is kept: the round trip is the one window the answer
-///     cannot speak for.
-///   - **A landed batch** says how long the session has run (`elapsedSec`),
-///     which places Start on this clock. Pending pickups seen before it are
-///     dropped, and the parcel that just landed is checked the same way —
-///     too late to hold it back, not too late to say so.
+///   - **Not live** — `no-session` or `paused` — at the instant a post was
+///     sent means the session was not live then, so any live stretch that
+///     follows begins after that instant. Everything in the parcel, and every
+///     pending pickup seen before the send, is outside it and is dropped. A
+///     pickup seen after the send is kept: the round trip is the one window
+///     the answer cannot speak for.
+///   - **Live** — the post landed, or a loot-less post was answered with a
+///     session — says when the session went live, which places that instant
+///     on this clock. Pending pickups seen before it are dropped, and the
+///     parcel that just landed is checked the same way — too late to hold it
+///     back, not too late to say so.
 ///
-/// The parcel that lands is the one thing that can still carry pre-Start
-/// loot: it had to be sent to find out that a session exists at all, and
-/// everything in it was picked up before the answer came. So while the last
-/// answer was `no-session` a parcel is a **probe** — one pickup, the oldest —
-/// and the rest waits in the pool, where Start, once known, cuts it exactly.
+/// The parcel that lands is the one thing that can still carry loot from
+/// outside the session: it had to be sent to find out the session was live,
+/// and everything in it was picked up before the answer came. The sender
+/// avoids that by asking with an empty post while the last answer was not
+/// live. A site that refuses the question gets the next best thing: a
+/// **probe** — one pickup, the oldest — while the rest waits in the pool,
+/// where the live instant, once known, cuts it exactly. That is what
+/// <see cref="Probing"/> means.
 ///
-/// Start is placed to about a second: `elapsedSec` is truncated, the answer
-/// took a leg to arrive, and a pickup's instant is when the board confirmed
-/// it, which trails the line's appearance by a tick or so. Those lean
-/// opposite ways and roughly cancel; where they do not, a pickup on the
-/// boundary is dropped rather than kept, the direction every ambiguity in
-/// this app resolves.
+/// The live instant is placed to about a second: the answer's figure is in
+/// whole seconds, it took a leg to arrive, and a pickup's instant is when the
+/// board confirmed it, which trails the line's appearance by a tick or so.
+/// Those lean opposite ways and roughly cancel; where they do not, a pickup
+/// on the boundary is dropped rather than kept, the direction every ambiguity
+/// in this app resolves. The one thing the cut can wrongly drop is a live
+/// pickup delivered late across a break — a site outage lasting through a
+/// pause, with the pickup pooled from before it — and that is a visible
+/// undercount, the same direction.
 /// </summary>
 public sealed class LootPool
 {
@@ -79,7 +88,11 @@ public sealed class LootPool
     /// <summary>Pickups the site has not taken: the parcel's and the pool's.</summary>
     public int Count => (_parcel?.Pickups.Count ?? 0) + _pending.Count;
 
-    /// <summary>True while the last answer was `no-session`, so the next parcel is a probe.</summary>
+    /// <summary>
+    /// True while the last answer said the session is not live — none, or
+    /// paused. The sender asks before it sends in this state, and a site that
+    /// will not be asked gets a one-pickup probe from <see cref="Mint"/>.
+    /// </summary>
     public bool Probing => _probing;
 
     /// <summary>A confirmed pickup from the board, at the instant it was confirmed.</summary>
@@ -108,8 +121,9 @@ public sealed class LootPool
         List<Pickup> taken;
         if (_probing)
         {
-            // One pickup, the oldest: this parcel exists to find out whether a
-            // session runs, and everything it carries may predate Start.
+            // One pickup, the oldest: this parcel exists to find out whether
+            // the session is live, and everything it carries may be from
+            // outside it.
             taken = [_pending[0]];
             _pending.RemoveAt(0);
         }
@@ -124,11 +138,12 @@ public sealed class LootPool
     }
 
     /// <summary>
-    /// The site had no session open when the parcel went out at
-    /// <paramref name="sentAt"/>. The parcel and every pending pickup seen
-    /// before then are outside any session and are dropped; returns how many.
+    /// The session was not live — there was none, or it was paused — when the
+    /// post went out at <paramref name="sentAt"/>. The parcel and every
+    /// pending pickup seen before then are outside any live stretch and are
+    /// dropped; returns how many.
     /// </summary>
-    public int NoSession(DateTime sentAt)
+    public int NotLive(DateTime sentAt)
     {
         var dropped = _parcel?.Pickups.Count ?? 0;
         _parcel = null;
@@ -138,17 +153,17 @@ public sealed class LootPool
     }
 
     /// <summary>
-    /// The parcel landed on a session that started at <paramref name="start"/>
-    /// (null when the answer did not say). Pending pickups seen before Start
-    /// are dropped. Returns how many of the parcel's own pickups were seen
-    /// before Start — landed, and not to be held back now, but said — and how
-    /// many pending ones were cut.
+    /// The session is live, and has been since <paramref name="liveSince"/>
+    /// (null when the answer did not say). Pending pickups seen before that
+    /// instant are dropped. Returns how many of the parcel's own pickups were
+    /// seen before it — landed, and not to be held back now, but said — and
+    /// how many pending ones were cut.
     /// </summary>
-    public (int Rode, int Pruned) Landed(DateTime? start)
+    public (int Rode, int Pruned) Live(DateTime? liveSince)
     {
         var rode = 0;
         var pruned = 0;
-        if (start is { } at)
+        if (liveSince is { } at)
         {
             if (_parcel is not null)
                 foreach (var p in _parcel.Pickups)

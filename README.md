@@ -79,9 +79,10 @@ old and are never sent. Capturing the window's own surface means:
 A pickup is sent only after its reading recurs on a later frame — nothing is
 ever sent on one frame's word. Confirmed lines leave in a small batch every
 few seconds; the site matches names server-side, and what it cannot match is
-held on the session page for you to resolve. No session running? What the
-app reads is dropped, and the log says so — loot picked up before you press
-Start was not part of the session, and it is never delivered to one later.
+held on the session page for you to resolve. No session running, or the
+session paused? What the app reads is dropped, and the log says so — loot
+picked up before you press Start, or while the run stands paused, was not
+part of the session, and it is never delivered to one later.
 The log announces when capture is live and heartbeats every couple of
 minutes when nothing changes, so a silent log always means something is
 wrong.

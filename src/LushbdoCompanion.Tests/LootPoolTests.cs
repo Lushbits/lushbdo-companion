@@ -3,10 +3,11 @@ using Xunit;
 namespace LushbdoCompanion.Tests;
 
 /// <summary>
-/// The pool's one promise: loot picked up outside a gather session never
-/// reaches one. Every cut it makes is on time — the instant a batch went out
-/// that the site answered `no-session`, and the Start a landed answer places —
-/// so every test here is a timeline.
+/// The pool's one promise: loot picked up while the session was not live
+/// never reaches it — not from before Start, not from a break. Every cut it
+/// makes is on time — the instant a post went out that the site answered
+/// not-live, and the instant a live answer says the session went live — so
+/// every test here is a timeline.
 /// </summary>
 public class LootPoolTests
 {
@@ -53,14 +54,14 @@ public class LootPoolTests
     }
 
     [Fact]
-    public void NoSessionDropsTheParcelAndEverythingSeenBeforeItWasSent()
+    public void NotLiveDropsTheParcelAndEverythingSeenBeforeItWasSent()
     {
         _pool.Add("Rough Stone", 1, At(0));
         var parcel = MintSettled(0);
         _pool.Add("Weeds", 1, At(5));                     // pooled while the parcel waits
         _pool.Add("Rough Stone", 1, At(10.2));            // arrived during the round trip
 
-        var dropped = _pool.NoSession(sentAt: At(10));
+        var dropped = _pool.NotLive(sentAt: At(10));
         Assert.Equal(2, dropped);
         Assert.Equal(1, _pool.Count);                     // the round-trip arrival is the one survivor
         Assert.True(_pool.Probing);
@@ -72,9 +73,24 @@ public class LootPoolTests
     }
 
     [Fact]
-    public void AfterNoSessionTheNextParcelIsOneOldestPickup()
+    public void AnEmptyPostThatIsAnsweredNotLiveCutsThePoolTheSameWay()
     {
-        _pool.NoSession(At(0));
+        // The sender asks with no lines while the session is not live, so
+        // there is no parcel — the cut is on the pool alone.
+        _pool.NotLive(At(0));
+        _pool.Add("Weeds", 1, At(3));
+        _pool.Add("Weeds", 1, At(14));
+        _pool.Add("Weeds", 1, At(15.1));
+
+        Assert.Equal(2, _pool.NotLive(sentAt: At(15)));
+        Assert.Equal(1, _pool.Count);
+        Assert.True(_pool.Probing);
+    }
+
+    [Fact]
+    public void WhileProbingTheNextParcelIsOneOldestPickup()
+    {
+        _pool.NotLive(At(0));
         _pool.Add("Rough Stone", 1, At(1));
         _pool.Add("Weeds", 2, At(1.1));
         _pool.Add("Rough Stone", 1, At(1.2));
@@ -86,9 +102,9 @@ public class LootPoolTests
     }
 
     [Fact]
-    public void LandingPlacesStartAndCutsWhatWasSeenBeforeIt()
+    public void LiveCutsWhatWasSeenBeforeTheSessionWentLive()
     {
-        _pool.NoSession(At(0));
+        _pool.NotLive(At(0));
         _pool.Add("Rough Stone", 1, At(2));               // the probe
         _pool.Add("Weeds", 1, At(5));                     // before Start
         _pool.Add("Weeds", 1, At(8));                     // before Start
@@ -96,8 +112,8 @@ public class LootPoolTests
         var probe = MintSettled(12);
         Assert.Single(probe.Pickups);
 
-        // The site answers at 15 s that the session has run 5 s: Start is at 10.
-        var (rode, pruned) = _pool.Landed(start: At(10));
+        // The site answers at 15 s that the session went live 5 s ago.
+        var (rode, pruned) = _pool.Live(liveSince: At(10));
         Assert.Equal(1, rode);                            // the probe itself predated Start, and says so
         Assert.Equal(2, pruned);
         Assert.False(_pool.Probing);
@@ -109,26 +125,47 @@ public class LootPoolTests
     }
 
     [Fact]
-    public void LandingReportsNothingWhenEverythingWasInsideTheSession()
+    public void ABreaksLootNeverReachesTheResumedRun()
+    {
+        // Paused at 100: the post at 105 is answered `paused`, and the member
+        // logs an alt to kill a boss. Resume at 300. The sender asked with an
+        // empty post at 305 and was told the session went live 5 s ago.
+        _pool.Add("Weeds", 1, At(101));
+        MintSettled(101);
+        Assert.Equal(1, _pool.NotLive(sentAt: At(105)));
+
+        _pool.Add("Boss Drop", 1, At(200));
+        _pool.Add("Boss Drop", 1, At(290));
+        _pool.Add("Weeds", 1, At(301));                   // the run's own, after Resume
+
+        var (rode, pruned) = _pool.Live(liveSince: At(300));
+        Assert.Equal(0, rode);                            // nothing was posted to find out
+        Assert.Equal(2, pruned);
+        Assert.Equal(1, _pool.Count);
+        Assert.Equal([("Weeds", 1)], _pool.Mint(At(305.5))!.Lines);
+    }
+
+    [Fact]
+    public void LiveReportsNothingWhenEverythingWasInsideTheSession()
     {
         _pool.Add("Weeds", 1, At(20));
         _pool.Add("Weeds", 1, At(21));
         MintSettled(21);
         _pool.Add("Weeds", 1, At(22));
 
-        Assert.Equal((0, 0), _pool.Landed(start: At(10)));
+        Assert.Equal((0, 0), _pool.Live(liveSince: At(10)));
         Assert.Equal(1, _pool.Count);
     }
 
     [Fact]
-    public void ALandingThatNamesNoSessionCutsNothing()
+    public void ALiveAnswerThatNamesNoInstantCutsNothing()
     {
-        _pool.NoSession(At(0));
+        _pool.NotLive(At(0));
         _pool.Add("Weeds", 1, At(1));
         MintSettled(1);
         _pool.Add("Weeds", 1, At(2));
 
-        Assert.Equal((0, 0), _pool.Landed(start: null));
+        Assert.Equal((0, 0), _pool.Live(liveSince: null));
         Assert.Equal(1, _pool.Count);
         Assert.False(_pool.Probing);
     }
@@ -141,7 +178,7 @@ public class LootPoolTests
         // belongs to no run.
         _pool.Add("Weeds", 1, At(0));
         MintSettled(0);
-        _pool.Landed(start: At(-60));
+        _pool.Live(liveSince: At(-60));
 
         _pool.Add("Weeds", 1, At(3));
         _pool.Add("Weeds", 1, At(4));
@@ -149,7 +186,7 @@ public class LootPoolTests
         _pool.Add("Weeds", 1, At(9));                     // between the runs, still pooled
         _pool.Add("Weeds", 1, At(9.5));                   // inside the new run
 
-        var (rode, pruned) = _pool.Landed(start: At(9.2));
+        var (rode, pruned) = _pool.Live(liveSince: At(9.2));
         Assert.Equal(2, rode);
         Assert.Equal(1, pruned);
         Assert.Equal(1, _pool.Count);

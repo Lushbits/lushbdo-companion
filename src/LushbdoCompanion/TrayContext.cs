@@ -575,9 +575,12 @@ public sealed class TrayContext : ApplicationContext
         var answer = result.Answer;
         if (!answer.Applied)
         {
-            _log.Append(answer.Reason == "no-session"
-                ? "  the site has no running gather session — press Start on /gather and try again."
-                : $"  not applied: {answer.Reason}");
+            _log.Append(answer.Reason switch
+            {
+                "no-session" => "  the site has no running gather session — press Start on /gather and try again.",
+                "paused" => "  the gather session is paused — press Resume on /gather and try again.",
+                _ => $"  not applied: {answer.Reason}"
+            });
             return;
         }
 
