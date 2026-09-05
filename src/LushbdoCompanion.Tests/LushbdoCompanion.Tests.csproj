@@ -19,6 +19,7 @@
     <Compile Include="..\LushbdoCompanion\OcrRows.cs" Link="app\OcrRows.cs" />
     <Compile Include="..\LushbdoCompanion\BalanceParser.cs" Link="app\BalanceParser.cs" />
     <Compile Include="..\LushbdoCompanion\BalanceBoard.cs" Link="app\BalanceBoard.cs" />
+    <Compile Include="..\LushbdoCompanion\LootPool.cs" Link="app\LootPool.cs" />
     <!-- Not app code: the strip read it serves was reverted, so it lives with
          the eval harness that still measures with it. See its own summary. -->
     <Compile Include="..\LushbdoCompanion.Eval\FrameDelta.cs" Link="eval\FrameDelta.cs" />

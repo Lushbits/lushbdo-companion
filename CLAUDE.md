@@ -46,8 +46,12 @@ same ToS class as streaming software. No feature is worth bending them.
 site's Settings → Devices, DPAPI-stored here). Payload
 `{batchId, lines: [{name, count}]}` — counts are **increments**. The server's
 idempotency ring makes redelivering a batchId safe; a fresh batch gets a fresh
-client-minted id. `applied:false, reason:"no-session"` means buffer and retry
-once a session runs; 401 means revoked — notify once and stop.
+client-minted id. `applied:false, reason:"no-session"` means the loot was
+picked up outside any session: drop it, and keep asking at a quiet pace so
+the next session is noticed (a landed answer's `elapsedSec` places Start, and
+`LootPool` cuts what was seen before it — the app used to hold and re-post,
+and a session opened after an afternoon's grinding began with the afternoon
+on it; owner, 2026-09-05). 401 means revoked — notify once and stop.
 
 ## Build
 
