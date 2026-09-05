@@ -46,8 +46,19 @@ same ToS class as streaming software. No feature is worth bending them.
 site's Settings → Devices, DPAPI-stored here). Payload
 `{batchId, lines: [{name, count}]}` — counts are **increments**. The server's
 idempotency ring makes redelivering a batchId safe; a fresh batch gets a fresh
-client-minted id. `applied:false, reason:"no-session"` means buffer and retry
-once a session runs; 401 means revoked — notify once and stop.
+client-minted id. `applied:false` with `reason:"no-session"` or `"paused"`
+means the session is not live and the loot was picked up outside it: drop it
+(the site claims and discards a paused batch itself; a no-session one it
+leaves to the app), and keep asking at a quiet pace so the next live stretch
+is noticed. Asking is a post with no lines; a site that refuses it (400) is
+probed with one pickup instead. A live answer's `liveSinceSec` places the
+instant the session went live — `elapsedSec` stands in on a site without it,
+and is gathering time, so after a break it lands early rather than late —
+and `LootPool` cuts what was seen before that instant. The app used to hold
+and re-post, and a session opened after an afternoon's grinding began with
+the afternoon on it; the ruling (owner, 2026-09-05) is that nothing picked
+up while the session is not live counts, a boss killed on an alt during a
+pause included. 401 means revoked — notify once and stop.
 
 ## Build
 

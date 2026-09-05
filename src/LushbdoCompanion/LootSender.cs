@@ -1,54 +1,58 @@
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The pipe from the board to the site. Confirmed pickups pool here and leave
-/// as a batch as soon as the drops stop arriving: one batch in flight at a
-/// time, its id minted
-/// client-side at packaging so the server's idempotency ring makes redelivery
-/// safe. `applied:false, reason:"no-session"` is not an error — the batch is
-/// held and re-posted quietly until a gather session runs. An unreachable
-/// site backs off without nagging; the log speaks only when the state
-/// changes. A 401 means the member revoked this device: say so once, raise
-/// <see cref="Revoked"/>, and stop for good.
+/// The pipe from the board to the site. Confirmed pickups pool in a
+/// <see cref="LootPool"/> and leave as a batch as soon as the drops stop
+/// arriving: one batch in flight at a time, its id minted client-side at
+/// packaging so the server's idempotency ring makes redelivery safe. An
+/// unreachable site backs off without nagging and keeps the batch; the log
+/// speaks only when the state changes. A 401 means the member revoked this
+/// device: say so once, raise <see cref="Revoked"/>, and stop for good.
+///
+/// `applied:false` with `reason:"no-session"` or `"paused"` is not an error
+/// and it is not a reason to wait, either: loot picked up while the session is
+/// not live is loot outside it, and the pool drops it rather than delivering
+/// it to whatever live stretch comes next. The pool's summary says how it
+/// tells the two apart. What this class adds is the pace — while the session
+/// is not live it posts again fifteen seconds after the last answer, never
+/// sooner, so a member grinding without a session costs the site four small
+/// posts a minute — and the way it asks.
+///
+/// Asking is a post with no lines. The site's answer to it says whether the
+/// session is live and, when it is, since when, and the pool cuts what it
+/// holds at that instant *before* anything is sent — so the batch that finds
+/// a live session never carries loot from before it. A site that refuses the
+/// empty post (HTTP 400: every site before the ask was added) is asked no
+/// further; from then on the pool's one-pickup probe finds the session and
+/// the log says when that one pickup was from outside it.
 /// </summary>
 public sealed class LootSender : IDisposable
 {
     /// <summary>How often the loop looks at the pool. Cheap: it usually finds nothing.</summary>
     private static readonly TimeSpan PollPace = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>
-    /// Quiet time after the last confirmed pickup before the pool ships. A
-    /// gulp of loot lands as several pickups a few hundred ms apart and should
-    /// still travel as one batch, but a lone drop should not wait on a timer
-    /// for a burst that is not coming — the member is watching the site for it.
-    /// </summary>
-    private static readonly TimeSpan CoalesceWindow = TimeSpan.FromMilliseconds(400);
-
-    /// <summary>
-    /// The ceiling on that wait. Loot that never stops arriving would otherwise
-    /// never find a quiet moment, and the pool would grow instead of shipping.
-    /// </summary>
-    private static readonly TimeSpan MintPace = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan NoSessionRetry = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan NotLivePace = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan NotLiveNotePace = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan BackoffFloor = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan BackoffCeiling = TimeSpan.FromSeconds(60);
 
-    private enum Flow { Flowing, NoSession, Unreachable }
+    private enum Flow { Flowing, NotLive, Unreachable }
 
     private readonly IngestClient _client;
     private readonly Action<string> _log;
     private readonly object _gate = new();
-    private readonly List<IngestClient.Line> _pending = [];
+    private readonly LootPool _pool = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _loop;
 
-    private IngestClient.Batch? _inFlight;
+    private LootPool.Parcel? _minted;   // the parcel _batch was built from
+    private IngestClient.Batch? _batch;
+    private bool _askRefused;           // the site answered an empty post with 400: probe instead
     private DateTime _nextAttempt = DateTime.MinValue;
     private TimeSpan _backoff = BackoffFloor;
     private Flow _flow = Flow.Flowing;
-    private DateTime _lastHoldNote = DateTime.MinValue;
-    private DateTime _lastAdd = DateTime.MinValue;
-    private DateTime _pooledSince = DateTime.MinValue;
+    private DateTime _lastNotLiveNote = DateTime.MinValue;
+    private int _droppedWhileNotLive;
     private long _sentLines;
 
     /// <summary>The site said 401 — the token is revoked. Raised once, from a worker thread.</summary>
@@ -66,19 +70,7 @@ public sealed class LootSender : IDisposable
     /// <summary>A confirmed pickup from the board. Counts are increments; same names merge within a batch.</summary>
     public void Add(string name, int count)
     {
-        lock (_gate)
-        {
-            var now = DateTime.UtcNow;
-            _lastAdd = now;
-            if (_pending.Count == 0) _pooledSince = now;
-            for (var i = 0; i < _pending.Count; i++)
-            {
-                if (!string.Equals(_pending[i].Name, name, StringComparison.Ordinal)) continue;
-                _pending[i] = _pending[i] with { Count = _pending[i].Count + count };
-                return;
-            }
-            _pending.Add(new IngestClient.Line(name, count));
-        }
+        lock (_gate) _pool.Add(name, count, DateTime.UtcNow);
     }
 
     private async Task RunAsync()
@@ -89,24 +81,40 @@ public sealed class LootSender : IDisposable
             while (await timer.WaitForNextTickAsync(_stop.Token))
             {
                 IngestClient.Batch? batch;
+                var ask = false;
                 lock (_gate)
                 {
-                    // Ship when the drops have stopped, or when they have been
-                    // going long enough that waiting for quiet is waiting
-                    // forever.
-                    var now = DateTime.UtcNow;
-                    var settled = now - _lastAdd >= CoalesceWindow;
-                    var waitedLongEnough = now - _pooledSince >= MintPace;
-                    if (_inFlight is null && _pending.Count > 0 && (settled || waitedLongEnough))
+                    if (_pool.Probing && !_askRefused)
                     {
-                        _inFlight = new IngestClient.Batch($"companion-{Guid.NewGuid():N}", [.. _pending]);
-                        _pending.Clear();
+                        // Not live, as far as the last answer knew. Ask before
+                        // sending anything: a post made to find out lands
+                        // whatever it carries. Nothing pooled, nothing to ask.
+                        ask = _pool.Count > 0;
+                        batch = null;
+                        _minted = null;
+                        _batch = null;
                     }
-                    batch = _inFlight;
+                    else
+                    {
+                        var parcel = _pool.Mint(DateTime.UtcNow);
+                        if (parcel is null)
+                        {
+                            _minted = null;
+                            _batch = null;
+                        }
+                        else if (!ReferenceEquals(parcel, _minted))
+                        {
+                            _minted = parcel;
+                            _batch = ToBatch(parcel);
+                        }
+                        batch = _batch;
+                    }
                 }
-                if (batch is null || DateTime.UtcNow < _nextAttempt) continue;
+                if (!ask && batch is null) continue;
+                if (DateTime.UtcNow < _nextAttempt) continue;
 
-                if (!await DeliverAsync(batch)) return; // revoked — the loop is done for good
+                batch ??= new IngestClient.Batch($"companion-ask-{Guid.NewGuid():N}", []);
+                if (!await DeliverAsync(batch, ask)) return; // revoked — the loop is done for good
             }
         }
         catch (OperationCanceledException)
@@ -115,10 +123,22 @@ public sealed class LootSender : IDisposable
         }
     }
 
-    /// <summary>False means stop everything: the token was rejected.</summary>
-    private async Task<bool> DeliverAsync(IngestClient.Batch batch)
+    private static IngestClient.Batch ToBatch(LootPool.Parcel parcel)
     {
+        var lines = new List<IngestClient.Line>(parcel.Lines.Count);
+        foreach (var (name, count) in parcel.Lines) lines.Add(new IngestClient.Line(name, count));
+        return new IngestClient.Batch(parcel.Id, lines);
+    }
+
+    /// <summary>
+    /// False means stop everything: the token was rejected. <paramref name="ask"/>
+    /// is a post with no lines, sent to learn whether the session is live.
+    /// </summary>
+    private async Task<bool> DeliverAsync(IngestClient.Batch batch, bool ask)
+    {
+        var sentAt = DateTime.UtcNow;
         var result = await _client.SendAsync(batch, _stop.Token);
+        var receivedAt = DateTime.UtcNow;
 
         if (result.Status is 401 or 403)
         {
@@ -126,6 +146,15 @@ public sealed class LootSender : IDisposable
             _log($"sent  nothing — {why}");
             Revoked?.Invoke(why);
             return false;
+        }
+
+        if (ask && result.Status == 400)
+        {
+            // A site from before the empty post meant anything. The probe
+            // takes over from here; the pace is already spent, so it goes now.
+            _askRefused = true;
+            _log("This site does not answer an empty post yet, so the first pickup after a break or before Start is what finds the session — and it lands with it. The log says when that happens.");
+            return true;
         }
 
         if (!result.Ok || result.Answer is null)
@@ -143,35 +172,61 @@ public sealed class LootSender : IDisposable
         _backoff = BackoffFloor;
         var answer = result.Answer;
 
-        if (!answer.Applied)
+        if (!answer.Applied && answer.Reason is "no-session" or "paused")
         {
-            if (answer.Reason == "no-session")
-            {
-                var held = HeldLineCount();
-                if (_flow != Flow.NoSession || DateTime.UtcNow - _lastHoldNote > TimeSpan.FromMinutes(1))
-                {
-                    _flow = Flow.NoSession;
-                    _lastHoldNote = DateTime.UtcNow;
-                    _log($"hold  {held} line(s) — no gather session is running; press Start on the site's /gather page.");
-                }
-                _nextAttempt = DateTime.UtcNow + NoSessionRetry;
-                return true;
-            }
+            int dropped;
+            lock (_gate) dropped = _pool.NotLive(sentAt);
+            _droppedWhileNotLive += dropped;
 
-            // An answer this version does not know how to hold on to. Dropping
-            // the batch is the only move that cannot repeat forever — say so.
-            _log($"drop  batch of {batch.Lines.Count} line(s) — the site did not apply it ({answer.Reason ?? "no reason given"}).");
-            lock (_gate) _inFlight = null;
+            var now = DateTime.UtcNow;
+            if (_flow != Flow.NotLive || now - _lastNotLiveNote >= NotLiveNotePace)
+            {
+                _flow = Flow.NotLive;
+                _lastNotLiveNote = now;
+                _log(answer.Reason == "paused"
+                    ? $"drop  {_droppedWhileNotLive} line(s) — the gather session is paused, so loot picked up now does not count. Resume it on the site's /gather page."
+                    : $"drop  {_droppedWhileNotLive} line(s) — no gather session is running, so loot picked up now does not count. Press Start on the site's /gather page.");
+            }
+            _nextAttempt = now + NotLivePace;
             return true;
         }
 
+        if (!answer.Applied && !ask && answer.Reason != "already-applied")
+        {
+            // An answer this version does not know how to hold on to. Dropping
+            // the batch is the only move that cannot repeat forever — say so.
+            _log($"drop  batch of {batch.Lines.Count} line(s) — the site did not apply it ({answer.Reason ?? "no reason given"}).");
+            lock (_gate) _pool.Discard();
+            return true;
+        }
+
+        // Live. The batch landed — on this delivery, or on an earlier one
+        // whose answer never arrived and which the site's ring has just
+        // recognised — or the empty post was answered with a session. Either
+        // way the answer says since when, and that instant on this clock is
+        // where the pool cuts. `elapsedSec` is the fallback for a site that
+        // does not say: it is gathering time since Start, so after a break it
+        // places an instant at or before the resume, never after it.
+        DateTime? liveSince = answer.Session is { } s
+            ? receivedAt - TimeSpan.FromSeconds(s.LiveSinceSec ?? s.ElapsedSec)
+            : null;
+        int rode, pruned;
+        lock (_gate) (rode, pruned) = _pool.Live(liveSince);
+
         if (_flow != Flow.Flowing)
         {
-            _log(_flow == Flow.NoSession
-                ? "sent  a gather session is running again — the held loot has landed."
+            _log(_flow == Flow.NotLive
+                ? "sent  the gather session is live — loot counts from here."
                 : "sent  the site is reachable again — the held loot has landed.");
             _flow = Flow.Flowing;
+            _droppedWhileNotLive = 0;
         }
+        if (!answer.Applied && !ask)
+            _log("sent  the site already had this batch — an earlier answer was lost on the way.");
+        if (rode > 0)
+            _log($"sent  {rode} line(s) in this batch were picked up before the session went live and landed with it — the batch that finds a live session cannot be held back. Correct it on the session page if it matters.");
+        if (pruned > 0)
+            _log($"drop  {pruned} line(s) picked up before the session went live — they do not count.");
 
         foreach (var m in answer.Matched ?? [])
             _log($"sent  {m.Name}  +{m.Added} → {m.Qty}");
@@ -180,19 +235,9 @@ public sealed class LootSender : IDisposable
         foreach (var d in answer.Dropped ?? [])
             _log($"drop  \"{d.LineText}\" ×{d.Count}  ({d.Why})");
 
-        Interlocked.Add(ref _sentLines, batch.Lines.Count);
-        lock (_gate)
-        {
-            _inFlight = null;
-            _nextAttempt = DateTime.MinValue;
-        }
+        if (!ask) Interlocked.Add(ref _sentLines, batch.Lines.Count);
+        _nextAttempt = DateTime.MinValue;
         return true;
-    }
-
-    private int HeldLineCount()
-    {
-        lock (_gate)
-            return (_inFlight?.Lines.Count ?? 0) + _pending.Count;
     }
 
     public void Dispose()
@@ -201,7 +246,8 @@ public sealed class LootSender : IDisposable
         try { _loop.Wait(TimeSpan.FromSeconds(2)); }
         catch { /* cancellation surfacing through Wait */ }
 
-        var abandoned = HeldLineCount();
+        int abandoned;
+        lock (_gate) abandoned = _pool.Count;
         if (abandoned > 0)
             _log($"drop  {abandoned} unsent line(s) discarded — watching stopped before they could be delivered.");
         _stop.Dispose();

@@ -33,10 +33,19 @@ public sealed class IngestClient(Settings settings)
         [property: JsonPropertyName("batchId")] string BatchId,
         [property: JsonPropertyName("lines")] IReadOnlyList<Line> Lines);
 
+    /// <summary>
+    /// The run a batch landed on. `elapsedSec` is gathering time — since
+    /// Start, less every break — the figure the site's own clock shows.
+    /// `liveSinceSec` is how long ago the session last went live: Start, or
+    /// the latest Resume. It is what the pool cuts at, and a site that does
+    /// not send it yet gets `elapsedSec` as the stand-in (Lushbits/bdo issue
+    /// filed 2026-09-05).
+    /// </summary>
     public sealed record SessionInfo(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("elapsedSec")] long ElapsedSec,
-        [property: JsonPropertyName("items")] int Items);
+        [property: JsonPropertyName("items")] int Items,
+        [property: JsonPropertyName("liveSinceSec")] long? LiveSinceSec = null);
 
     public sealed record MatchedLine(
         [property: JsonPropertyName("line")] string LineText,
