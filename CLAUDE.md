@@ -115,7 +115,10 @@ Issues #1–#3 are the milestone roadmap ((b) eyes, (c) dedup + live sending,
 decisions this build encodes — transparent background is the target, silver
 is skipped app-side, nothing is sent on one frame's word — are recorded in
 #2's comments. Dedup keys line identity on position in the scroll stream
-(text-anchored, voted across OCR passes), and every ambiguity resolves the
+(text-anchored, voted across OCR passes, and the winning shift checked
+against position — a repeat gather is near-identical text that out-votes
+the survivors, and only the survivors being *out of place* under its shift
+tells the two apart), and every ambiguity resolves the
 same direction: a visible undercount, never a double count. Logic that can
 run without Windows (parser, keyer, board) is link-compiled into
 `src/LushbdoCompanion.Tests`; `dotnet test src/LushbdoCompanion.Tests` runs
