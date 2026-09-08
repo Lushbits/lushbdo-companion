@@ -27,12 +27,17 @@ dropped.
 1. On [lushbdo.com](https://lushbdo.com): Settings → Devices → pair a device.
    The token is shown **once** — copy it.
 2. Run the app. It opens Settings on first launch: paste the token, Save.
-3. Right-click the tray icon → **Send test batch** with a gather session
-   running on the site. Watch the log; refresh the session page.
+3. Press **Send test batch** on the same page with a gather session running
+   on the site. Watch the log; refresh the session page.
 
 The token is stored DPAPI-encrypted per Windows user — the settings file is
 useless on another machine or account. Revoking the device on the site kills
 the token on its next request; the app will tell you in the log.
+
+Everything the app can be told lives in that one settings window (right-click
+the tray icon → **Settings…**), with pages down the left: **Pairing**,
+**Regions**, **Overlay**, **Diagnostics**. The tray itself keeps only
+Start/Stop watching, Open log, Settings and Quit.
 
 ## Watching the loot log
 
@@ -47,14 +52,14 @@ Set the game up once:
   requirement.
 - English client (v1 reads English only).
 
-Then, from the tray icon: **Watched regions → Loot log**. The app finds the game's
+Then **Settings… → Regions → Loot log → Pick**. The app finds the game's
 window, photographs one frame of it, and shows that still full-screen — drag a
 rectangle around the chat tab's text on it, Esc cancels. Start the rectangle
 just right of the `System` chip column — every loot line begins "You have
 obtained", so nothing is lost and the chip never reaches OCR. Because the
 frame comes from the game window's own surface, it does not matter what is
-covering the game at that moment: open the tray menu over a browser and the
-picker still shows a clean still of the chat. (If the game window cannot be
+covering the game at that moment: click Pick with a browser over the game and
+the picker still shows a clean still of the chat. (If the game window cannot be
 found, the app falls back to picking on the live screen after a short "switch
 to the game" countdown.)
 
@@ -115,8 +120,8 @@ truncated grouped number is still grouped) and re-reading passes it (it repeats
 while the overlay is up). The market panel has nothing that hovers over its
 figure, so the fix is to read the panel that does not have the problem.
 
-**Open the Central Market in-game first**, then from the tray icon: **Watched
-regions → Marketplace silver**. The picker photographs the game as it is *right
+**Open the Central Market in-game first**, then **Settings… → Regions →
+Marketplace silver → Pick**. The picker photographs the game as it is *right
 now*, so with the panel closed there is nothing to drag a rectangle around. If
 the game closed the panel when you tabbed away, press Esc and the app offers to
 pick on the live screen after a three-second countdown instead.
@@ -139,7 +144,7 @@ tick.
 ### Watch silver only
 
 If the app costs more CPU than you want — on a laptop especially — tick **Watch
-silver only** in the tray. It skips the loot log entirely: nothing is keyed, no
+silver only** on the Regions page. It skips the loot log entirely: nothing is keyed, no
 chat pass ever runs, and the app costs one sampled diff over a small crop per
 tick plus a short read in the seconds a market panel is actually open.
 
@@ -152,8 +157,8 @@ Your loot rectangle is kept, so switching back is one click rather than another
 pick. The log says which mode is live when watching starts, so there is no
 guessing.
 
-**Watched regions** lists both rectangles with the size and position each is
-set to, or `not picked yet`. Clicking one picks it again, and each has its own
+The **Regions** page lists both rectangles with the size and position each is
+set to, or `not picked yet`. **Pick** picks one again, and each has its own
 **Forget**. Forgetting the loot log is allowed too — watching then stops until
 you pick one again, because the single capture is aimed at it.
 
@@ -200,8 +205,7 @@ Nothing is injected, nothing is hooked, and window capture never includes it,
 so it is neither in the frames the app reads nor in an OBS window capture of
 the game.
 
-Off by default. Right-click the tray icon → **Session overlay…** opens the
-settings window's Overlay page, where it is switched on and placed:
+Off by default. **Settings… → Overlay** is where it is switched on and placed:
 
 - **Anchor** — one of nine spots: the corners, the middle of each edge, or the
   centre of the game window. Anchoring is what survives a resolution or

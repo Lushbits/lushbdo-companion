@@ -3,11 +3,12 @@ using System.Diagnostics;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The app's settings, in one window with pages down the left (#43). It holds
-/// what already existed as settings — the pairing, and the overlay's switch
-/// and placement — and nothing that would make it a dashboard: the site is
-/// the product, and this is the smallest thing that can hold a few switches
-/// and one live preview.
+/// The app's settings, in one window with pages down the left (#43): the
+/// pairing, the rectangles and the silver-only mode, the overlay's switch and
+/// placement, and the diagnostics. It holds what already existed as settings
+/// and nothing that would make it a dashboard: the site is the product, and
+/// this is the smallest thing that can hold a few switches and one live
+/// preview. The tray keeps only what is done in the moment.
 ///
 /// The Overlay page's preview is the overlay itself. While the page is open
 /// the real overlay window draws sample figures over the game, so every
@@ -24,12 +25,22 @@ namespace LushbdoCompanion;
 public sealed class SettingsForm : Form
 {
     /// <summary>
-    /// What the window asks of the tray, which owns the overlay window and
-    /// the watcher. The window edits and saves <see cref="Settings"/> itself;
-    /// these say that it did, so the running things follow.
+    /// What the window asks of the tray, which owns the watcher, the senders
+    /// and the overlay window. The window edits and saves <see cref="Settings"/>
+    /// itself where a change is only a value; these say that it did, so the
+    /// running things follow — and carry the actions that are not values.
     /// </summary>
     public interface IHost
     {
+        /// <summary>Pick a rectangle on a still of the game; on success it is saved and watching starts.</summary>
+        Task PickRegionAsync(Settings.RegionKind kind);
+
+        /// <summary>Drop a rectangle; the loot log's stops watching until one is picked again.</summary>
+        Task ForgetRegionAsync(Settings.RegionKind kind);
+
+        /// <summary>"Watch silver only" changed and is saved; a running watch is restarted the other way.</summary>
+        Task SilverOnlyChanged();
+
         /// <summary>The Overlay page opened or closed: sample figures over the game meanwhile.</summary>
         void PreviewOverlay(bool on);
 
@@ -41,9 +52,20 @@ public sealed class SettingsForm : Form
 
         /// <summary>The token or the site address was saved.</summary>
         void PairingSaved();
+
+        /// <summary>Post the fixed test batch to the site and say in the log what came back.</summary>
+        Task SendTestBatchAsync();
+
+        /// <summary>"Trace OCR to file" changed and is saved; a running watch switches at once.</summary>
+        void TraceChanged();
+
+        /// <summary>Ask GitHub for the newest release now and open its page if this one is behind.</summary>
+        Task CheckForUpdatesAsync();
     }
 
-    public enum Page { Pairing, Overlay }
+    public enum Page { Pairing, Regions, Overlay, Diagnostics }
+
+    private static readonly Settings.RegionKind[] RegionKinds = [Settings.RegionKind.Loot, Settings.RegionKind.Marketplace];
 
     private readonly Settings _settings;
     private readonly IHost _host;
@@ -51,11 +73,17 @@ public sealed class SettingsForm : Form
     private readonly ListBox _pages;
     private readonly Dictionary<Page, Panel> _panels = [];
     private Page? _current;
+    private bool _loading; // the controls are being set from settings, not by the member
 
     // Pairing
     private readonly Label _status;
     private readonly TextBox _token;
     private readonly TextBox _baseUrl;
+
+    // Regions
+    private readonly Dictionary<Settings.RegionKind, Label> _regionStatus = [];
+    private readonly Dictionary<Settings.RegionKind, Button> _forget = [];
+    private readonly CheckBox _silverOnly;
 
     // Overlay
     private readonly CheckBox _show;
@@ -64,7 +92,9 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _offsetY;
     private readonly NumericUpDown _size;
     private readonly Label _previewNote;
-    private bool _loading; // the controls are being set from settings, not by the member
+
+    // Diagnostics
+    private readonly CheckBox _trace;
 
     public SettingsForm(Settings settings, IHost host, Page open = Page.Pairing)
     {
@@ -115,14 +145,64 @@ public sealed class SettingsForm : Form
         var save = new Button { Text = "Save", Left = 405, Top = 172, Width = 75 };
         save.Click += (_, _) => SavePairing();
 
-        var version = new Label
-        {
-            Text = $"Version {UpdateChecker.Current.ToString(3)}",
-            Left = 0, Top = 178, Width = 200, ForeColor = SystemColors.GrayText
-        };
+        var site = new LinkLabel { Text = "Open lushbdo.com", Left = 0, Top = 178, Width = 200 };
+        site.LinkClicked += (_, _) => OpenSite("");
+
+        // The proof of a pairing: a fixed batch, posted to a session that is
+        // running on the site, with the site's answer in the log.
+        var test = new Button { Text = "Send test batch", Left = 0, Top = 224, Width = 130 };
+        test.Click += async (_, _) => { test.Enabled = false; try { await _host.SendTestBatchAsync(); } finally { test.Enabled = true; } };
+        var testNote = Note(
+            "Posts a fixed batch of pickups to your running gather session — start one on the site first — and " +
+            "writes the site's reply to the log.",
+            140, 224, 340, 52);
 
         var pairing = NewPage(Page.Pairing);
-        pairing.Controls.AddRange([_status, devices, tokenLabel, _token, urlLabel, _baseUrl, save, version]);
+        pairing.Controls.AddRange([_status, devices, tokenLabel, _token, urlLabel, _baseUrl, save, site, test, testNote]);
+
+        // --- Regions ---------------------------------------------------------
+        // Each rectangle says exactly what it is set to, in pixels, because
+        // that is the only way to tell two rectangles apart at a glance when
+        // one of them is aimed wrong — which is the thing that actually goes
+        // wrong (#22 field session).
+        var regions = NewPage(Page.Regions);
+        var top = 0;
+        foreach (var kind in RegionKinds)
+        {
+            var loot = kind == Settings.RegionKind.Loot;
+            var name = new Label { Text = loot ? "Loot log" : "Marketplace silver", Left = 0, Top = top, Width = 480, Font = new Font(Font, FontStyle.Bold) };
+            var status = new Label { Left = 0, Top = top + 20, Width = 480 };
+            _regionStatus[kind] = status;
+            var pick = new Button { Text = "Pick…", Left = 0, Top = top + 42, Width = 75 };
+            var forget = new Button { Text = "Forget", Left = 81, Top = top + 42, Width = 75 };
+            _forget[kind] = forget;
+            pick.Click += async (_, _) => await Run(pick, () => _host.PickRegionAsync(kind));
+            forget.Click += async (_, _) => await Run(forget, () => _host.ForgetRegionAsync(kind));
+            var note = Note(loot
+                    ? "The chat tab filtered to item pickups. Drag around its text, starting just right of the " +
+                      "System chip column; picking it starts watching."
+                    : "Open the Central Market in-game first. Drag around its Warehouse Balance figure — the label, " +
+                      "the number and nothing else — and keep buttons out of the rectangle: a hover overlay can " +
+                      "cover the digits. Optional; without it your silver is simply not read.",
+                0, top + 72, 480, loot ? 32 : 48);
+            regions.Controls.AddRange([name, status, pick, forget, note]);
+            top += loot ? 112 : 128;
+        }
+
+        _silverOnly = new CheckBox { Text = "Watch silver only (much lighter)", Left = 0, Top = top + 4, AutoSize = true };
+        _silverOnly.CheckedChanged += async (_, _) =>
+        {
+            if (_loading) return;
+            _settings.SilverOnly = _silverOnly.Checked;
+            _settings.Save();
+            await Run(_silverOnly, _host.SilverOnlyChanged);
+        };
+        var silverNote = Note(
+            "Skips the loot log entirely and reads only the silver rectangle. The loot log is what costs CPU — it " +
+            "keys every captured frame and reads the chat — so this is far lighter on a laptop. Your loot " +
+            "rectangle is kept, so switching back is one click.",
+            0, top + 28, 480, 48);
+        regions.Controls.AddRange([_silverOnly, silverNote]);
 
         // --- Overlay ---------------------------------------------------------
         _show = new CheckBox { Text = "Show on the game window while a session runs", Left = 0, Top = 0, AutoSize = true };
@@ -196,14 +276,42 @@ public sealed class SettingsForm : Form
             offsetNote, sizeLabel, _size, sizeNote, reset, _previewNote]);
         overlay.Controls.AddRange(_anchors);
 
+        // --- Diagnostics -----------------------------------------------------
+        _trace = new CheckBox { Text = "Trace OCR to file", Left = 0, Top = 0, AutoSize = true };
+        _trace.CheckedChanged += (_, _) =>
+        {
+            if (_loading) return;
+            _settings.TraceOcr = _trace.Checked;
+            _settings.Save();
+            _host.TraceChanged();
+        };
+        var traceNote = Note(
+            "Every OCR row, vote and gate decision, with snapshots of the frames, written next to settings.json in " +
+            "%APPDATA%\\lushbdo-companion. It is what a misread can be diagnosed from, and it grows fast — leave " +
+            "it off unless a bug needs it.",
+            0, 24, 480, 52);
+
+        var version = new Label { Text = $"Version {UpdateChecker.Current.ToString(3)}", Left = 0, Top = 96, Width = 300 };
+        var update = new Button { Text = "Check for updates", Left = 0, Top = 120, Width = 130 };
+        update.Click += async (_, _) => await Run(update, _host.CheckForUpdatesAsync);
+        var updateNote = Note(
+            "Compares this version to the newest GitHub release and opens its page if you are behind. The app " +
+            "checks by itself at startup and once a day; it never updates itself.",
+            140, 120, 340, 48);
+
+        var diagnostics = NewPage(Page.Diagnostics);
+        diagnostics.Controls.AddRange([_trace, traceNote, version, update, updateNote]);
+
         Controls.Add(_pages);
         Controls.Add(close);
         foreach (var panel in _panels.Values) Controls.Add(panel);
 
         RefreshStatus();
+        RefreshRegions();
         LoadPlacement(_settings.Overlay);
         _loading = true;
         _show.Checked = _settings.ShowOverlay;
+        _trace.Checked = _settings.TraceOcr;
         _loading = false;
         _pages.SelectedItem = open;
     }
@@ -229,6 +337,29 @@ public sealed class SettingsForm : Form
         TextAlign = HorizontalAlignment.Right,
     };
 
+    /// <summary>
+    /// One of the tray's actions, from a button: the button is down while it
+    /// runs (a pick opens a full-screen still and a second click would open
+    /// another), and the Regions page re-reads the settings when it is done,
+    /// since a pick or a forget is what changes them.
+    /// </summary>
+    private async Task Run(Control control, Func<Task> action)
+    {
+        control.Enabled = false;
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            if (!IsDisposed)
+            {
+                control.Enabled = true;
+                RefreshRegions();
+            }
+        }
+    }
+
     /// <summary>The page list, drawn by hand so the rows are tall enough to click at and read like tabs.</summary>
     private void DrawPage(object? sender, DrawItemEventArgs e)
     {
@@ -247,6 +378,7 @@ public sealed class SettingsForm : Form
         if (_current == Page.Overlay) _host.PreviewOverlay(false);
         foreach (var (kind, panel) in _panels) panel.Visible = kind == page;
         _current = page;
+        if (page == Page.Regions) RefreshRegions();
         if (page != Page.Overlay) return;
 
         // The one thing the page cannot show on its own: whether there is a
@@ -264,6 +396,23 @@ public sealed class SettingsForm : Form
     {
         if (_current == Page.Overlay) _host.PreviewOverlay(false);
         base.OnFormClosed(e);
+    }
+
+    /// <summary>What each rectangle is set to, in the game window's pixels, or that it is not.</summary>
+    private void RefreshRegions()
+    {
+        foreach (var kind in RegionKinds)
+        {
+            var rect = _settings.RegionFor(kind);
+            _regionStatus[kind].Text = rect is { } r
+                ? $"{r.Width}×{r.Height} at ({r.X}, {r.Y}) in the game window"
+                : "not picked yet";
+            _regionStatus[kind].ForeColor = rect is null ? Color.FromArgb(196, 132, 42) : SystemColors.ControlText;
+            _forget[kind].Enabled = rect is not null;
+        }
+        _loading = true;
+        _silverOnly.Checked = _settings.SilverOnly;
+        _loading = false;
     }
 
     /// <summary>Put a placement on the controls without the controls putting it back.</summary>
