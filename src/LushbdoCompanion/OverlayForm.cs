@@ -280,7 +280,13 @@ public sealed class OverlayForm : Form
             g.Clear(Color.Transparent);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            using var path = new GraphicsPath();
+            // Winding, not the default even-odd: Inter's "4" is two contours
+            // that overlap where the stem crosses the bar, and even-odd leaves
+            // that overlap unfilled — a hole with the outline showing through
+            // it (field, 0.7.0). Outer contours wind one way and counters the
+            // other, so winding fills every glyph and still leaves the holes
+            // in 0, 6, 8 and 9 open.
+            using var path = new GraphicsPath { FillMode = FillMode.Winding };
             var y = pad;
             foreach (var line in lines)
             {
