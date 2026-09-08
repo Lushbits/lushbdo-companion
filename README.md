@@ -199,7 +199,10 @@ the site's own **Worth so far** shows. The pace shows once the run is two
 minutes old, and a dash stands in its place until then. On a site from before
 it priced runs, or a sheet nothing could be priced on, the item count shows in
 the value's place. Nothing else is on it, and it shows only while the site says
-a session is live and the game is the window in front.
+a session is live and the game is the window in front. It also goes away three
+minutes after the site's last reply and comes back with the next one: the app
+speaks to the site only when there is loot to send, so a session stopped with
+nothing picked up after it would otherwise never reach the overlay.
 
 It is a separate click-through window of the app's own, laid over the game
 window's rectangle — the same thing as dragging a browser over the game.

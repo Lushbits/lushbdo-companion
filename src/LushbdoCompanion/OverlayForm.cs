@@ -30,7 +30,13 @@ namespace LushbdoCompanion;
 /// site from before it, or a sheet nothing could be priced on, the item
 /// count shows in the value's place; a pace that cannot be shown yet is a
 /// dash, not the clock — the clock in that spot read as strange (owner,
-/// 2026-09-09). Each line has its own size and the order is the member's. Hidden whenever there is nothing honest to show — no running
+/// 2026-09-09). Each line has its own size and the order is the member's.
+/// Three minutes without a reply and the figures go too (owner,
+/// 2026-09-09): the sender speaks only when there is loot to send, so a
+/// session stopped with no pickup after it would otherwise never reach this
+/// window, and stale figures would stand over the game for as long as the
+/// member played on. The next reply brings them back. A timer, not a poll —
+/// the owner's call, and it costs the site nothing. Hidden whenever there is nothing honest to show — no running
 /// session, a pause, the game not in front, the game gone — and repainted
 /// only when a figure changes. Following the window is a position query
 /// four times a second and nothing more.
@@ -75,6 +81,9 @@ public sealed class OverlayForm : Form
 
     private static readonly TimeSpan FollowPace = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan FindPace = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long the last figures stand without another reply behind them.</summary>
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(3);
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     private readonly System.Windows.Forms.Timer _follow;
@@ -100,6 +109,7 @@ public sealed class OverlayForm : Form
     private Point _shownAt = new(int.MinValue, int.MinValue);
     private IntPtr _game;
     private DateTime _nextFind = DateTime.MinValue;
+    private DateTime _heardAt = DateTime.MinValue; // the last reply that carried a session
 
     /// <summary>The figures were dragged somewhere in a preview, and this is where, as a placement.</summary>
     public event Action<OverlayPlacement>? Placed;
@@ -190,6 +200,9 @@ public sealed class OverlayForm : Form
             { SilverPerHourGross: { } pace, ElapsedSec: >= PaceAfterSec } => Compact(pace) + "/h",
             _ => NoPace,
         };
+        // Every reply with a session on it restarts the clock, the same
+        // figures included: the next follow brings back what staleness hid.
+        if (live) _heardAt = DateTime.UtcNow;
         if (live == _live && line1 == _line1 && line2 == _line2) return;
         _live = live;
         _line1 = line1;
@@ -207,6 +220,13 @@ public sealed class OverlayForm : Form
         // so nothing can leave a live overlay sitting in the way of a click.
         TakeMouse(_preview);
         if (!(_live || _preview))
+        {
+            Conceal();
+            return;
+        }
+        // Figures nobody has vouched for in three minutes come down; a
+        // preview draws samples and has no reply to be stale against.
+        if (!_preview && DateTime.UtcNow - _heardAt > StaleAfter)
         {
             Conceal();
             return;
