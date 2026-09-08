@@ -45,7 +45,12 @@ public sealed class IngestClient(Settings settings)
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("elapsedSec")] long ElapsedSec,
         [property: JsonPropertyName("items")] int Items,
-        [property: JsonPropertyName("liveSinceSec")] long? LiveSinceSec = null);
+        [property: JsonPropertyName("liveSinceSec")] long? LiveSinceSec = null,
+        // What the run is worth so far and its pace, whole silver, on the
+        // basis the session page shows (bdo#724). Absent on a site from
+        // before it; the overlay (#39) shows the count and the clock then.
+        [property: JsonPropertyName("value")] long? Value = null,
+        [property: JsonPropertyName("perHour")] long? PerHour = null);
 
     public sealed record MatchedLine(
         [property: JsonPropertyName("line")] string LineText,

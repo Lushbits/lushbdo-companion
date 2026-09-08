@@ -28,6 +28,8 @@ public sealed class TrayContext : ApplicationContext
     private LootWatcher? _watcher;
     private LootSender? _sender;
     private SilverSender? _silver;
+    private OverlayForm? _overlay;
+    private readonly ToolStripMenuItem _overlayItem;
     private bool _updateBalloonShown;
 
     public TrayContext()
@@ -78,10 +80,31 @@ public sealed class TrayContext : ApplicationContext
                           "costs CPU — it keys every frame and reads the chat — so this is far lighter on a laptop.",
         };
 
+        // Two figures over the game while a session runs (#39): value so far
+        // and silver per hour, as the site reports them on each reply. A
+        // separate click-through window over the game's rectangle — nothing
+        // is injected or hooked, which is the only way this app draws.
+        _overlayItem = new ToolStripMenuItem("Show on the game window", null, (_, _) => ToggleOverlay())
+        {
+            Checked = _settings.ShowOverlay,
+            ToolTipText = "Draw the running session's value and silver/hour over the game, in a click-through " +
+                          "window of our own. Shows only while a session is live and the game is in front.",
+        };
+        var overlay = new ToolStripMenuItem("Session overlay");
+        overlay.DropDownItems.Add(_overlayItem);
+        overlay.DropDownItems.Add(new ToolStripMenuItem("Place it…", null,
+            async (_, _) => await PickRegionAsync(Settings.RegionKind.Overlay))
+        {
+            ToolTipText = "Drag a rectangle where the figures should sit. Its height sets the text size.",
+        });
+        overlay.DropDownItems.Add(new ToolStripMenuItem("Back to the default spot", null,
+            async (_, _) => await ForgetRegionAsync(Settings.RegionKind.Overlay)));
+
         var menu = new ContextMenuStrip { ShowItemToolTips = true };
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
         menu.Items.Add(regions);
         menu.Items.Add(_silverOnlyItem);
+        menu.Items.Add(overlay);
         menu.Items.Add(_watchItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
@@ -199,6 +222,7 @@ public sealed class TrayContext : ApplicationContext
     private static string RegionName(Settings.RegionKind kind) => kind switch
     {
         Settings.RegionKind.Loot => "Loot log",
+        Settings.RegionKind.Overlay => "Session overlay",
         _ => "Marketplace silver",
     };
 
@@ -213,6 +237,9 @@ public sealed class TrayContext : ApplicationContext
     {
         Settings.RegionKind.Loot =>
             "This is a frozen frame of the game window — drag a rectangle around its loot chat tab. Esc cancels.",
+        Settings.RegionKind.Overlay =>
+            "This is a frozen frame of the game window — drag a rectangle where the session figures should sit, " +
+            "clear of the game's own UI. Two lines of text fill its height. Esc cancels.",
         _ =>
             "Open the Central Market in-game first. This is a frozen frame of the game window — drag a rectangle " +
             "around its Warehouse Balance figure, and keep any buttons out of it. If the market is not in this " +
@@ -222,6 +249,7 @@ public sealed class TrayContext : ApplicationContext
     private static string LivePickerHint(Settings.RegionKind kind) => kind switch
     {
         Settings.RegionKind.Loot => "Drag a rectangle around the game's loot chat tab — Esc cancels",
+        Settings.RegionKind.Overlay => "Drag a rectangle where the session figures should sit — Esc cancels",
         _ => "With the Central Market open, drag a rectangle around its silver figure — Esc cancels",
     };
 
@@ -241,7 +269,8 @@ public sealed class TrayContext : ApplicationContext
 
     private async Task PickRegionAsync(Settings.RegionKind kind)
     {
-        if (_watcher is not null) StopWatching("Stopped watching while the region is re-picked.");
+        var wasWatching = _watcher is not null;
+        if (wasWatching) StopWatching("Stopped watching while the region is re-picked.");
 
         // The normal path: photograph one frame of the game's own window and
         // pick on that still. The game can sit buried under other windows —
@@ -258,7 +287,7 @@ public sealed class TrayContext : ApplicationContext
                 {
                     region = picker.Selection;
                 }
-                else if (kind == Settings.RegionKind.Loot || !AskToPickLive(kind))
+                else if (kind is Settings.RegionKind.Loot or Settings.RegionKind.Overlay || !AskToPickLive(kind))
                 {
                     _log.Append($"{RegionName(kind)} region pick cancelled.");
                     return;
@@ -310,6 +339,14 @@ public sealed class TrayContext : ApplicationContext
         _settings.Save();
         RefreshRegionMenu();
         _log.Append($"Region · {RegionName(kind)} set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
+        if (kind == Settings.RegionKind.Overlay)
+        {
+            // Nothing is read there: the overlay is drawn, and only while
+            // watching. Placing it is not the intent to start.
+            _overlay?.Place(region);
+            if (wasWatching) await StartWatchingAsync();
+            return;
+        }
         if (!_watchItem.Enabled)
         {
             // Owner ruling (#22, 2026-08-30): watching is all or nothing.
@@ -342,6 +379,14 @@ public sealed class TrayContext : ApplicationContext
     /// </summary>
     private async Task ForgetRegionAsync(Settings.RegionKind kind)
     {
+        if (kind == Settings.RegionKind.Overlay)
+        {
+            _settings.ForgetRegion(kind);
+            _settings.Save();
+            _overlay?.Place(null);
+            _log.Append("Session overlay back at its default spot — top centre of the game window.");
+            return;
+        }
         if (_settings.RegionFor(kind) is null)
         {
             _log.Append($"{RegionName(kind)} is not set.");
@@ -414,6 +459,7 @@ public sealed class TrayContext : ApplicationContext
             {
                 sender = new LootSender(_client, Say);
                 sender.Revoked += OnRevoked;
+                sender.SessionSeen += session => ui?.Post(_ => _overlay?.Report(session), null);
             }
 
             // One credential opens both routes (bdo#668), so a revoked token
@@ -442,6 +488,7 @@ public sealed class TrayContext : ApplicationContext
         _sender = sender;
         _silver = silver;
         if (_settings.TraceOcr) watcher.SetTracing(true);
+        SyncOverlay();
         _watchItem.Text = "Stop watching";
         _log.Append(_settings.SilverOnly
             ? "Watching the silver balance only. The loot log is not read at all — no keying, no chat OCR — so this " +
@@ -501,8 +548,44 @@ public sealed class TrayContext : ApplicationContext
         return false;
     }
 
+    /// <summary>
+    /// The overlay exists exactly while there is a sender to feed it: it shows
+    /// what the site reports back, so without a paired sender it has nothing
+    /// honest to draw, and without watching it has nothing at all.
+    /// </summary>
+    private void SyncOverlay()
+    {
+        if (_settings.ShowOverlay && _sender is not null)
+        {
+            _overlay ??= new OverlayForm(_settings.RegionFor(Settings.RegionKind.Overlay));
+            return;
+        }
+        _overlay?.Dispose();
+        _overlay = null;
+    }
+
+    private void ToggleOverlay()
+    {
+        _settings.ShowOverlay = !_settings.ShowOverlay;
+        _settings.Save();
+        _overlayItem.Checked = _settings.ShowOverlay;
+        SyncOverlay();
+        if (!_settings.ShowOverlay)
+        {
+            _log.Append("Session overlay off.");
+            return;
+        }
+        _log.Append(_sender is not null
+            ? "Session overlay on — it appears over the game once the site reports a running session, and only while the game is in front."
+            : _watcher is not null
+                ? "Session overlay on — it needs the site's replies to draw from, so it appears once this device is paired and watching the loot log."
+                : "Session overlay on — it appears once watching starts and the site reports a running session.");
+    }
+
     private void StopWatching(string message)
     {
+        _overlay?.Dispose();
+        _overlay = null;
         _watcher?.Dispose();
         _watcher = null;
         _sender?.Dispose();
@@ -623,6 +706,7 @@ public sealed class TrayContext : ApplicationContext
 
     private void Quit()
     {
+        _overlay?.Dispose();
         _watcher?.Dispose();
         _sender?.Dispose();
         _silver?.Dispose();
