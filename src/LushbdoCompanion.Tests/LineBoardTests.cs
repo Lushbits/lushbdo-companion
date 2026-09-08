@@ -271,6 +271,92 @@ public class LineBoardTests
         Assert.All(_emitted, e => Assert.Equal(("Sea Monster's Spirit Pouch", 19), (e.Name, e.Count)));
     }
 
+    /// <summary>
+    /// A gather at one node: a dozen distinct items in one gulp, then the
+    /// next gather at the same node a few seconds later drops nearly the
+    /// same dozen — same items, same counts, same minute — by which time
+    /// the first gather has mostly left the top of the region.
+    /// </summary>
+    private static string[] Gather(int size, string stamp = "23:57") =>
+        new[]
+        {
+            "Ancient Spirit Dust", "Rough Stone", "Powder of Time", "Black Stone Powder", "Trace of Nature",
+            "Weeds", "Silver Azalea", "Sunrise Herb", "Dry Mane Grass", "Fire Flake Flower", "Pure Powder Reagent",
+            "Clear Liquid Reagent", "Ash Timber",
+        }.Take(size).Select((name, i) => $"You have obtained [{name}] x{1 + i % 3}. ({stamp})").ToArray();
+
+    private (string Text, double Y)[] Screen(IEnumerable<string> history, int rows = 17, double pitch = 24) =>
+        history.TakeLast(rows).Select((t, i) => (t, i * pitch)).ToArray();
+
+    [Theory]
+    [InlineData(12, 12)]
+    [InlineData(12, 11)]
+    [InlineData(13, 13)]
+    public void ARepeatedGatherIsCountedAgain(int first, int second)
+    {
+        // Field, 2026-09-08 23:57: the second gather's lines each matched
+        // exactly one tracker — the scrolled-off twin from the first gather
+        // — so the unique arbiter saw nothing alias, and the twins out-voted
+        // the five survivors that pinned the true shift. Same size, the vote
+        // read "no scroll" and every line merged into an already-emitted
+        // tracker, silently. One item fewer, it read as a one-row backwards
+        // scroll and the two-strike guard realigned the burst away. The
+        // survivors are known lines out of place under the twins' shift, and
+        // that is what decides it.
+        var history = Enumerable.Range(0, 17).Select(i => $"You have obtained [Wolf Blood] x{i}. (23:56)").ToList();
+        Pass(Screen(history)); // baseline
+        Pass(Screen(history));
+
+        history.AddRange(Gather(first));
+        Pass(Screen(history));
+        Pass(Screen(history));
+        Assert.Equal(first, _emitted.Count);
+
+        history.AddRange(Gather(second));
+        Pass(Screen(history));
+        Pass(Screen(history));
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
+        Assert.Equal(first + second, _emitted.Count);
+        Assert.Equal(2, _emitted.Count(e => e.Name == "Ancient Spirit Dust"));
+    }
+
+    [Fact]
+    public void AGatherThatRepeatsTheWholeScreenIsTheSamePictureAndIsNotGuessed()
+    {
+        // The one shape no reading of text can count: every visible line,
+        // survivors included, identical to the last pass. It must land on
+        // the undercount side — nothing sent, nothing double counted — and
+        // must not throw the board.
+        var gather = Gather(13);
+        var history = new List<string>();
+        for (var i = 0; i < 3; i++) history.AddRange(gather);
+        Pass(Screen(history)); // baseline
+        Pass(Screen(history));
+        history.AddRange(gather);
+        Pass(Screen(history));
+        Pass(Screen(history));
+        Assert.Empty(_emitted);
+        Assert.DoesNotContain(_notes, n => n.Contains("Realigning"));
+    }
+
+    [Fact]
+    public void ALoneCoincidenceCannotCarryAScreenfulOfNewLines()
+    {
+        // A shift under which almost every tracker leaves the screen has
+        // no witnesses against it by construction. It must not win on that
+        // alone: with the true shift's support intact, the board takes the
+        // true shift, and a single aliasable match at the far shift claims
+        // nothing.
+        var history = Enumerable.Range(0, 16).Select(i => $"You have obtained [Wolf Blood] x{i}. (23:56)").ToList();
+        history.Add("You have obtained [Wolf Blood] x0. (23:56)"); // the bottom row repeats the top one
+        Pass(Screen(history)); // baseline
+        Pass(Screen(history));
+        history.Add("You have obtained [Wolf Hide] x2. (23:57)"); // one real pickup
+        Pass(Screen(history));
+        Pass(Screen(history));
+        Assert.Equal([("Wolf Hide", 2, "You have obtained [Wolf Hide] x2. (23:57)")], _emitted);
+    }
+
     [Fact]
     public void NameWrappedMidBracketJoinsItsOtherHalf()
     {

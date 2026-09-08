@@ -169,7 +169,10 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         // lines vote for several shifts, but every *other* stable line votes
         // only for the true one.
         double dy;
-        if (VoteScroll(lines) is var (full, uniqueVote) && full is { } voted)
+        var loot = new bool[lines.Count];
+        for (var i = 0; i < lines.Count; i++)
+            loot[i] = LootParser.Parse(lines[i].Text).Kind != LootParser.Kind.Unrecognized;
+        if (VoteScroll(lines, loot) is var (full, uniqueVote) && full is { } voted)
         {
             _nullPasses = 0;
             dy = voted;
@@ -303,7 +306,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
         note($"Baseline read — the {lines.Count} line(s) already on screen are old; new pickups from here on are counted.");
     }
 
-    private (double? Full, double? Unique) VoteScroll(List<OcrLineInput> lines)
+    private (double? Full, double? Unique) VoteScroll(List<OcrLineInput> lines, bool[] loot)
     {
         // A text visible k times against m trackers holding it makes k×m
         // pairs, at most one per visible copy true. Splitting each text's
@@ -347,10 +350,76 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 }
             }
         }
-        return (BestBin(bins), uniqueBins is null ? null : BestBin(uniqueBins));
+        return (BestConsistentBin(bins, lines, loot, pairCounts), uniqueBins is null ? null : BestConsistentBin(uniqueBins, lines, loot, pairCounts));
     }
 
-    private static double? BestBin(Dictionary<int, (double Weight, double DySum)> bins)
+    /// <summary>
+    /// The heaviest bin, unless the screen says it cannot be. Weight alone
+    /// chose the shift until a gathering session showed the hole in it: a
+    /// gather drops a dozen lines in one gulp, the next gather at the same
+    /// node drops nearly the same dozen — same items, same counts, same
+    /// minute — and by then the first gather has mostly scrolled off. Each
+    /// new copy then matches exactly one tracker (its scrolled-off twin),
+    /// so the unique arbiter cannot see it alias, and the twins out-weigh
+    /// the few survivors that pin the real shift. The vote read "no scroll"
+    /// and the whole second gather merged into the first gather's emitted
+    /// trackers, silently; one item fewer and it read as a one-row
+    /// backwards scroll, two-struck the guard and realigned the burst away
+    /// (field, 2026-09-08 23:57).
+    ///
+    /// What weight cannot see, position can. A line whose text is on the
+    /// board somewhere is a known line, and in a bottom-anchored chat a
+    /// known line has exactly two honest explanations under a shift: it is
+    /// the tracker it lands on, or it is a fresh copy entering at the
+    /// bottom. Landing on a tracker that holds a different line, or sitting
+    /// above the bottom edge with no tracker under it, is neither — lines
+    /// do not change in place and do not appear mid-screen — so such a line
+    /// is a witness against that shift. Under the twins' shift the
+    /// survivors are witnesses; under the survivors' shift the twins are
+    /// fresh copies at the bottom, which is exactly what they are. A
+    /// witness is not a misread: a misread keys as nothing on the board
+    /// (about a fifth of reads, measured on the 2026-08-30 trace) and is
+    /// not counted here at all, and a misread that happens to key as some
+    /// other line is rare enough that one witness is ignored. Two or more
+    /// send the vote to the heaviest bin with at most one witness and real
+    /// support of its own: two clean matches, or one that cannot alias (the
+    /// unique arbiter's standard — a single coincidence must never carry a
+    /// shift that claims a screenful of new lines). A screen that supports
+    /// no such bin votes for nothing, the same honest hold the board already
+    /// takes when nothing matches at all.
+    ///
+    /// The tie-break stays what it was: with nothing to tell two shifts
+    /// apart, the smaller one claims less new content. And a gather whose
+    /// every line, survivors included, repeats the last one is the same
+    /// picture twice; no reading of text can count that, and it is an
+    /// undercount by construction.
+    /// </summary>
+    private double? BestConsistentBin(Dictionary<int, (double Weight, double DySum)> bins, List<OcrLineInput> lines, bool[] loot, Dictionary<string, int> known)
+    {
+        var heaviest = Heaviest(bins);
+        if (heaviest is not { } best) return null;
+        var dy = best.Value.DySum / best.Value.Weight;
+        var (witnesses, _, _) = Witnesses(dy, lines, loot, known);
+        if (witnesses <= 1) return dy;
+
+        trace?.Invoke($"vote  shift {dy:F1} (weight {best.Value.Weight:F1}) contradicted by {witnesses} known line(s) out of place — asking the other bins");
+        bins.Remove(best.Key);
+        while (Heaviest(bins) is { } next)
+        {
+            var candidate = next.Value.DySum / next.Value.Weight;
+            var (w, clean, unique) = Witnesses(candidate, lines, loot, known);
+            if (w <= 1 && (clean >= 2 || unique >= 1))
+            {
+                trace?.Invoke($"vote  shift {candidate:F1} (weight {next.Value.Weight:F1}) holds — {clean} clean match(es), {unique} of them unaliasable, {w} witness(es)");
+                return candidate;
+            }
+            bins.Remove(next.Key);
+        }
+        trace?.Invoke("vote  no shift explains the screen — holding");
+        return null;
+    }
+
+    private static KeyValuePair<int, (double Weight, double DySum)>? Heaviest(Dictionary<int, (double Weight, double DySum)> bins)
     {
         var best = default(KeyValuePair<int, (double Weight, double DySum)>);
         foreach (var bin in bins)
@@ -362,7 +431,48 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                 (bin.Value.Weight == best.Value.Weight && Math.Abs(bin.Key) < Math.Abs(best.Key)))
                 best = bin;
         }
-        return best.Value.Weight == 0 ? null : best.Value.DySum / best.Value.Weight;
+        return best.Value.Weight == 0 ? null : best;
+    }
+
+    /// <summary>
+    /// How many known loot-shaped lines the shift leaves without an honest
+    /// place, how many it lands cleanly on a tracker holding their text, and
+    /// how many of those clean landings are texts that cannot alias — visible
+    /// once, tracked once — the same standing the unique arbiter gives them.
+    /// </summary>
+    private (int Witnesses, int Clean, int Unique) Witnesses(double dy, List<OcrLineInput> lines, bool[] loot, Dictionary<string, int> known)
+    {
+        var tolerance = 0.35 * _rowPitch;
+        var bottom = double.MinValue;
+        foreach (var t in _trackers)
+            if (t.HasLootShape && t.Y + dy > bottom) bottom = t.Y + dy;
+        if (bottom == double.MinValue) bottom = _trackers[^1].Y + dy;
+
+        var witnesses = 0;
+        var clean = 0;
+        var unique = 0;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (!loot[i] || !known.TryGetValue(lines[i].Key, out var pairs)) continue;
+            var line = lines[i];
+            Tracker? nearest = null;
+            var nearestDist = double.MaxValue;
+            foreach (var t in _trackers)
+            {
+                var dist = Math.Abs(t.Y + dy - line.Y);
+                if (dist < nearestDist) { nearest = t; nearestDist = dist; }
+            }
+            if (nearest is not null && nearestDist <= tolerance)
+            {
+                if (nearest.Readings.ContainsKey(line.Key)) { clean++; if (pairs == 1) unique++; }
+                else if (nearest.HasLootShape) witnesses++;
+            }
+            else if (line.Y < bottom - 0.3 * _rowPitch)
+            {
+                witnesses++; // no tracker under it and not at the bottom edge: a known line appearing mid-screen
+            }
+        }
+        return (witnesses, clean, unique);
     }
 
     private void MatchAndTrack(List<OcrLineInput> lines, double bottom, int newBudget)
