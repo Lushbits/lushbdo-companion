@@ -127,7 +127,11 @@ public sealed class SettingsForm : Form
         foreach (var page in Enum.GetValues<Page>()) _pages.Items.Add(page);
         _pages.SelectedIndexChanged += (_, _) => { if (_pages.SelectedItem is Page page) ShowPage(page); };
 
-        var close = new Button { Text = "Close", Left = 553, Top = 366, Width = 75, DialogResult = DialogResult.Cancel };
+        // The window is modeless, and a DialogResult closes only a modal one —
+        // which is how 0.7.0–0.7.2 shipped a Close button that did nothing. The
+        // button closes the window itself; CancelButton keeps Esc on it.
+        var close = new Button { Text = "Close", Left = 553, Top = 366, Width = 75 };
+        close.Click += (_, _) => Close();
         CancelButton = close;
 
         // --- Pairing ---------------------------------------------------------
