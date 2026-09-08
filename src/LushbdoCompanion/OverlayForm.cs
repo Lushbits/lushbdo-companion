@@ -35,6 +35,14 @@ namespace LushbdoCompanion;
 /// across a resolution change or a resized client. While the settings
 /// window's Overlay page is open the same window draws sample figures
 /// instead (<see cref="Preview"/>), so the page needs no mock of its own.
+///
+/// That is also the one time the window takes the mouse: in preview the
+/// click-through style is dropped so the sample figures can be dragged to
+/// where they should sit, and a drop is said back as a placement — the
+/// anchor snaps to the cell of the window the figures landed in, the offset
+/// follows (<see cref="Placed"/>). The moment the page closes the style is
+/// back and the window is click-through again; live figures are never in
+/// the way of a click on the game.
 /// </summary>
 public sealed class OverlayForm : Form
 {
@@ -71,12 +79,19 @@ public sealed class OverlayForm : Form
     private string _line2 = "";
     private bool _live;                  // the site last reported a running session
     private bool _preview;               // the settings page is open: sample figures, game in front or not
+    private bool _takesMouse;            // the click-through style is off, for dragging in a preview
+    private bool _dragging;
+    private Point _dragStart;            // screen: where the mouse went down
+    private Point _dragOrigin;           // screen: where the window was then
     private bool _dirty = true;          // a figure changed since the last paint
     private bool _shown;
     private Size _painted;
     private Point _shownAt = new(int.MinValue, int.MinValue);
     private IntPtr _game;
     private DateTime _nextFind = DateTime.MinValue;
+
+    /// <summary>The figures were dragged somewhere in a preview, and this is where, as a placement.</summary>
+    public event Action<OverlayPlacement>? Placed;
 
     public OverlayForm(OverlayPlacement placement)
     {
@@ -125,14 +140,16 @@ public sealed class OverlayForm : Form
     /// <summary>
     /// The settings page's live preview: draw the sample figures over the
     /// game whether or not a session is live and whether or not the game is
-    /// in front — the settings window is what is in front then. One repaint
-    /// on the way in and one on the way out; the live figures come back
-    /// exactly as they were.
+    /// in front — the settings window is what is in front then — and take
+    /// the mouse so they can be dragged. One repaint on the way in and one
+    /// on the way out; the live figures come back exactly as they were, and
+    /// click-through with them.
     /// </summary>
     public void Preview(bool on)
     {
         if (on == _preview) return;
         _preview = on;
+        if (!on && _dragging) EndDrag(apply: false);
         _dirty = true;
         Follow();
     }
@@ -171,11 +188,17 @@ public sealed class OverlayForm : Form
 
     private void Follow()
     {
-        if (IsDisposed || !(_live || _preview))
+        if (IsDisposed) return;
+        // Applied on every follow rather than only when the preview flips,
+        // so nothing can leave a live overlay sitting in the way of a click.
+        TakeMouse(_preview);
+        if (!(_live || _preview))
         {
             Conceal();
             return;
         }
+        // Mid-drag the mouse says where the window is, not the placement.
+        if (_dragging) return;
 
         // The game window is found the way the picker finds it — by process —
         // and that walk is not free, so it happens when the handle is lost and
@@ -249,6 +272,78 @@ public sealed class OverlayForm : Form
     }
 
     /// <summary>
+    /// Click-through or not. The style is what makes the window passive
+    /// beside the game — the mouse goes through the figures to whatever is
+    /// under them — and it is dropped for exactly as long as a preview
+    /// lasts, so the figures can be picked up. The cursor says so.
+    /// </summary>
+    private void TakeMouse(bool on)
+    {
+        if (on == _takesMouse) return;
+        _takesMouse = on;
+        var style = GetWindowLongPtr(Handle, GwlExStyle).ToInt64();
+        style = on ? style & ~WsExTransparent : style | WsExTransparent;
+        SetWindowLongPtr(Handle, GwlExStyle, new IntPtr(style));
+        Cursor = on ? Cursors.SizeAll : Cursors.Default;
+    }
+
+    // --- Dragging, in a preview only --------------------------------------
+    //
+    // A layered window is hit only where its pixels have alpha, which is why
+    // Render gives the whole bitmap a hair of alpha in a preview: the figures
+    // can be grabbed between the digits too. The window follows the mouse by
+    // plain moves while the button is down, and the drop becomes a placement.
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.Button != MouseButtons.Left || !_takesMouse || !_shown) return;
+        _dragging = true;
+        _dragStart = Cursor.Position;
+        _dragOrigin = _shownAt;
+        Capture = true;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (!_dragging) return;
+        var now = Cursor.Position;
+        var at = new Point(_dragOrigin.X + now.X - _dragStart.X, _dragOrigin.Y + now.Y - _dragStart.Y);
+        if (at == _shownAt) return;
+        SetWindowPos(Handle, HwndTopmost, at.X, at.Y, 0, 0, SwpNoSize | SwpNoActivate);
+        _shownAt = at;
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (_dragging && e.Button == MouseButtons.Left) EndDrag(apply: true);
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (_dragging && !Capture) EndDrag(apply: true); // the capture was taken away mid-drag: keep where it got to
+    }
+
+    private void EndDrag(bool apply)
+    {
+        _dragging = false;
+        if (Capture) Capture = false;
+        if (apply && _game != IntPtr.Zero)
+        {
+            var bounds = GameWindow.BoundsOf(_game);
+            if (bounds.Width > 0 && bounds.Height > 0)
+            {
+                _placement = _placement.At(bounds, _painted, _shownAt);
+                Placed?.Invoke(_placement);
+            }
+        }
+        Follow();
+    }
+
+    /// <summary>
     /// The chat's own text contract, drawn our way: a bright core with a dark
     /// outline within reach, so it reads over any scenery the way the loot log
     /// does. Drawn into an alpha bitmap and handed to the compositor whole;
@@ -277,7 +372,10 @@ public sealed class OverlayForm : Form
         using var bitmap = new Bitmap(w, h, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bitmap))
         {
-            g.Clear(Color.Transparent);
+            // In a preview the whole bitmap gets an alpha of 1 — invisible,
+            // and enough for the compositor to count it as the window, so a
+            // drag can start between the digits and not only on them.
+            g.Clear(_preview ? Color.FromArgb(1, 0, 0, 0) : Color.Transparent);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             // Winding, not the default even-odd: Inter's "4" is two contours
@@ -395,6 +493,7 @@ public sealed class OverlayForm : Form
     // --- Win32 -----------------------------------------------------------
 
     private static readonly IntPtr HwndTopmost = new(-1);
+    private const int GwlExStyle = -20;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoActivate = 0x0010;
     private const int SwHide = 0;
@@ -419,6 +518,9 @@ public sealed class OverlayForm : Form
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int cmd);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    // The Ptr variants: the app is built for win-x64 only, where the plain ones do not exist.
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
     [DllImport("user32.dll", SetLastError = true)]

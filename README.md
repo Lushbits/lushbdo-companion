@@ -218,7 +218,12 @@ Off by default. **Settings… → Overlay** is where it is switched on and place
 While that page is open the overlay itself is the preview: it draws sample
 figures (`12,345,678` and `45.6M/h`) over the game whether or not a session is
 running, so every control changes what you see on the game as you change it.
-Start the game first — with no game window there is nothing to draw over.
+Or skip the numbers and **drag the figures** to where you want them — the
+anchor snaps to whichever of the nine cells they land in and the offset
+follows, so the page always shows what you did. Dragging works only while that
+page is open; at every other time the overlay is click-through and the mouse
+goes to the game. Start the game first — with no game window there is nothing
+to draw over.
 
 If you placed the overlay with an earlier build's rectangle picker, the app
 converts that once at startup into the same spot as an anchor and an offset,

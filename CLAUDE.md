@@ -29,7 +29,12 @@ same ToS class as streaming software. No feature is worth bending them.
   which is what survives a resolution change). The overlay itself is that
   page's preview — while the page is open the real window draws sample
   figures over the game, one repaint in and one out — so nothing is mocked in
-  the dialog and the preview costs nothing while the window is closed.
+  the dialog and the preview costs nothing while the window is closed. The
+  preview is also the one time the window takes the mouse (owner ask,
+  2026-09-09): the click-through style is dropped so the figures can be
+  dragged, a drop snaps the anchor to the cell it landed in and works the
+  offset back, and the style is re-applied on every follow so a live overlay
+  can never be left in the way of a click on the game.
 - **Featherweight beside the game.** Gamers notice; no feature is worth frame
   drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
   background is transparent by design (owner decision, #2), so raw pixels

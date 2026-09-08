@@ -111,6 +111,43 @@ public class OverlayPlacementTests
         Assert.Equal(fine, fine.Clamped());
     }
 
+    [Theory]
+    [InlineData(150, 80, OverlayAnchor.TopLeft)]          // centre lands in the top-left third
+    [InlineData(960, 80, OverlayAnchor.TopCentre)]
+    [InlineData(1700, 80, OverlayAnchor.TopRight)]
+    [InlineData(150, 560, OverlayAnchor.MiddleLeft)]
+    [InlineData(960, 560, OverlayAnchor.Centre)]
+    [InlineData(1700, 560, OverlayAnchor.MiddleRight)]
+    [InlineData(150, 1000, OverlayAnchor.BottomLeft)]
+    [InlineData(960, 1000, OverlayAnchor.BottomCentre)]
+    [InlineData(1700, 1000, OverlayAnchor.BottomRight)]
+    public void A_drop_hangs_from_the_cell_it_landed_in_and_resolves_back_to_the_same_spot(int x, int y, OverlayAnchor expected)
+    {
+        var dropped = new Point(x, y);
+        var placement = OverlayPlacement.Default.At(Window, Painted, dropped);
+        Assert.Equal(expected, placement.Anchor);
+        Assert.Equal(dropped, placement.Resolve(Window, Painted));
+        Assert.Equal(OverlayPlacement.Default.TextPct, placement.TextPct); // a drag never changes the size
+    }
+
+    [Fact]
+    public void A_drop_at_a_corner_is_a_small_inset_from_that_corner()
+    {
+        // 24 px in from the bottom-right: exactly what a member would type.
+        var at = new Point(Window.Right - Painted.Width - 24, Window.Bottom - Painted.Height - 24);
+        var placement = OverlayPlacement.Default.At(Window, Painted, at);
+        Assert.Equal(new OverlayPlacement(OverlayAnchor.BottomRight, 24, 24, OverlayPlacement.Default.TextPct), placement);
+    }
+
+    [Fact]
+    public void A_drop_outside_the_window_still_hangs_from_the_nearest_edge()
+    {
+        var placement = OverlayPlacement.Default.At(Window, Painted, new Point(Window.Left - 500, Window.Top - 300));
+        Assert.Equal(OverlayAnchor.TopLeft, placement.Anchor);
+        Assert.Equal(-500, placement.OffsetX);
+        Assert.Equal(-300, placement.OffsetY);
+    }
+
     [Fact]
     public void Round_trips_through_json_with_the_anchor_by_name()
     {
