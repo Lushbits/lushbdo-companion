@@ -16,28 +16,38 @@ public enum OverlayAnchor
 }
 
 /// <summary>
-/// Where the session overlay sits and how big its text is (#43): an anchor,
-/// an offset from it, and a text height as a share of the game window's
-/// height. This is the one place that owns overlay geometry; the window
-/// resolves it against the game's bounds every time it follows them.
+/// Where the session overlay sits and how it draws (#43): an anchor, an
+/// offset from it, a text height for each of its two lines as a share of the
+/// game window's height, and which line comes first. This is the one place
+/// that owns the overlay's geometry; the window resolves it against the
+/// game's bounds every time it follows them.
 ///
 /// Why not a rectangle: the picker's rectangle (#41) did not survive a
 /// resolution or window-size change, its height doubled as a text size nobody
 /// would guess, and nothing about it could be seen until a session was live.
-/// An anchor survives the window changing shape, the size scales with it, and
+/// An anchor survives the window changing shape, the sizes scale with it, and
 /// every number here has a visible meaning while the settings page is open.
 ///
 /// The offset is measured <em>in</em> from the anchored edge — the way a HUD
 /// element's margin is usually given — so a positive offset on a right or
 /// bottom anchor moves the text left or up. On a centred axis there is no
 /// edge to come in from, and positive is right and down.
+///
+/// The pace has its own size and defaults smaller than the value (owner ask,
+/// 2026-09-09), and the order is the member's: value then pace, or the other
+/// way round. Both arrived after the first files were written, so they carry
+/// defaults and an older file reads as it always did.
 /// </summary>
 public sealed record OverlayPlacement(
     [property: JsonConverter(typeof(JsonStringEnumConverter))] OverlayAnchor Anchor,
     int OffsetX,
     int OffsetY,
-    double TextPct)
+    double TextPct,
+    double PaceTextPct = OverlayPlacement.DefaultPaceTextPct,
+    bool PaceFirst = false)
 {
+    public const double DefaultPaceTextPct = 1.6;
+
     /// <summary>Top centre of the game window, a few pixels down: where nothing of the game's own UI sits at rest.</summary>
     public static readonly OverlayPlacement Default = new(OverlayAnchor.TopCentre, 0, 6, 2.0);
 
@@ -50,9 +60,14 @@ public sealed record OverlayPlacement(
     private const float MinTextPx = 10;
     private const float MaxTextPx = 160;
 
-    /// <summary>The text height in pixels for a game window of this size, whole pixels so a font is remade only when it matters.</summary>
-    public float TextPx(Size window) =>
-        MathF.Round(Math.Clamp((float)(window.Height * TextPct / 100), MinTextPx, MaxTextPx));
+    /// <summary>The value line's text height in pixels for a game window of this size, whole pixels so a font is remade only when it matters.</summary>
+    public float TextPx(Size window) => Px(window, TextPct);
+
+    /// <summary>The pace line's, likewise.</summary>
+    public float PaceTextPx(Size window) => Px(window, PaceTextPct);
+
+    private static float Px(Size window, double pct) =>
+        MathF.Round(Math.Clamp((float)(window.Height * pct / 100), MinTextPx, MaxTextPx));
 
     /// <summary>Where a painted bitmap of this size goes, in screen pixels, over a game window with these bounds.</summary>
     public Point Resolve(Rectangle window, Size painted)
@@ -72,8 +87,11 @@ public sealed record OverlayPlacement(
         return new Point(x, y);
     }
 
-    private int Column => (int)Anchor % 3; // 0 left, 1 centre, 2 right
-    private int Row => (int)Anchor / 3;    // 0 top, 1 middle, 2 bottom
+    /// <summary>0 left, 1 centre, 2 right — which is also how the two lines align with each other.</summary>
+    public int Column => (int)Anchor % 3;
+
+    /// <summary>0 top, 1 middle, 2 bottom.</summary>
+    public int Row => (int)Anchor / 3;
 
     /// <summary>
     /// Where a drag left the figures, said as a placement: the anchor is the
@@ -81,7 +99,7 @@ public sealed record OverlayPlacement(
     /// figures dropped near a corner hang from that corner and survive the
     /// window changing shape — and the offset is whatever puts the bitmap
     /// exactly there under that anchor. <see cref="Resolve"/> of the result
-    /// gives the point back; the size is untouched.
+    /// gives the point back; the sizes and the order are untouched.
     /// </summary>
     public OverlayPlacement At(Rectangle window, Size painted, Point at)
     {
@@ -116,6 +134,7 @@ public sealed record OverlayPlacement(
         OffsetX = Math.Clamp(OffsetX, -MaxOffset, MaxOffset),
         OffsetY = Math.Clamp(OffsetY, -MaxOffset, MaxOffset),
         TextPct = double.IsFinite(TextPct) ? Math.Clamp(TextPct, MinTextPct, MaxTextPct) : Default.TextPct,
+        PaceTextPct = double.IsFinite(PaceTextPct) ? Math.Clamp(PaceTextPct, MinTextPct, MaxTextPct) : DefaultPaceTextPct,
     };
 
     /// <summary>

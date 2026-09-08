@@ -51,8 +51,8 @@ public sealed class IngestClient(Settings settings)
         // shipped in bdo#725): gross, and net of the member's own market
         // tax. Null is "nothing on the sheet could be valued", never zero,
         // and `unvaluedRows` says how many rows that left out. Absent on a
-        // site from before it; the overlay (#39) shows the count and the
-        // clock then.
+        // site from before it; the overlay (#39) shows the count and a dash
+        // then.
         [property: JsonPropertyName("valueGross")] long? ValueGross = null,
         [property: JsonPropertyName("valueNet")] long? ValueNet = null,
         [property: JsonPropertyName("silverPerHourGross")] long? SilverPerHourGross = null,

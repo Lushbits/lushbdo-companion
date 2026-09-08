@@ -20,7 +20,16 @@ same ToS class as streaming software. No feature is worth bending them.
   and held lines live there. The app's only UI beyond pairing is its live log,
   (milestone b) the region picker, (#39) a two-line session overlay that
   draws only what the site reports back on an ingest reply — value and pace
-  once bdo#724 ships, the item count and clock until then — as a separate
+  once bdo#724 ships, the item count and a dash until then (the clock stood
+  in for the pace and read as strange — owner, 2026-09-09, who also asked for
+  a size per line and the order as a setting), and hidden three minutes after
+  the last reply until the next one (owner, 2026-09-09: a timer, not a poll —
+  the sender speaks only when there is loot, so a stop with nothing picked up
+  after it never reaches the overlay otherwise); **gross**, before
+  the market's cut, by owner ruling (2026-09-09: "always show before tax on
+  the overlay"), which is also the site's default view — #42 had picked net
+  and the overlay and the sheet then showed two numbers for one run — as a
+  separate
   click-through window over the game's rectangle, never anything injected,
   and (#43) one settings window with pages down the left, which holds the
   settings the tray already had and the overlay's placement: an anchor, an

@@ -194,10 +194,15 @@ border around the game window is unavoidable there, same as with OBS.
 
 Two figures over the game while a session runs: what the session is worth so
 far and its pace in silver per hour, as the site reports them on each reply —
-the net figures, what you would bank. On a site from before it priced runs, or
-a sheet nothing could be priced on, the item count and the gathering clock show
-instead. Nothing else is on it, and it shows only while the site says a session
-is live and the game is the window in front.
+the full value at current prices, before the market's cut, which is the figure
+the site's own **Worth so far** shows. The pace shows once the run is two
+minutes old, and a dash stands in its place until then. On a site from before
+it priced runs, or a sheet nothing could be priced on, the item count shows in
+the value's place. Nothing else is on it, and it shows only while the site says
+a session is live and the game is the window in front. It also goes away three
+minutes after the site's last reply and comes back with the next one: the app
+speaks to the site only when there is loot to send, so a session stopped with
+nothing picked up after it would otherwise never reach the overlay.
 
 It is a separate click-through window of the app's own, laid over the game
 window's rectangle — the same thing as dragging a browser over the game.
@@ -212,8 +217,10 @@ Off by default. **Settings… → Overlay** is where it is switched on and place
   window-size change.
 - **Offset** — pixels in from the anchored edge, or right and down from the
   centre. Negative pushes the other way.
-- **Size** — text height as a percentage of the game window's height, two
-  percent by default, so it scales with the window.
+- **Value size** and **Pace size** — each line's text height as a percentage
+  of the game window's height, so it scales with the window. Two percent and
+  1.6 percent by default; the pace reads best a little smaller.
+- **Order** — value then pace, or pace then value.
 
 While that page is open the overlay itself is the preview: it draws sample
 figures (`12,345,678` and `45.6M/h`) over the game whether or not a session is
