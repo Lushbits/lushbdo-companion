@@ -41,16 +41,26 @@ public sealed class Settings
     /// Only the loot log is required. The marketplace rectangle (#22) is
     /// optional: somebody who never wants their silver read never picks it,
     /// and the app never asks for it.
+    ///
+    /// The session overlay (#39) is not a region any more. It was for two
+    /// builds — a picked rectangle whose top-left was the spot and whose
+    /// height set the text size — and #43 replaced that with an anchor, an
+    /// offset and a size, because a rectangle does not survive the window
+    /// changing shape and nothing about it could be seen until a session was
+    /// live. See <see cref="Overlay"/>.
     /// </summary>
-    /// <summary>
-    /// The two rectangles that are read, and one that is drawn: the session
-    /// overlay's spot (#39) rides the same picker and the same window-relative
-    /// storage, and is the one kind no capture ever includes.
-    /// </summary>
-    public enum RegionKind { Loot, Marketplace, Overlay }
+    public enum RegionKind { Loot, Marketplace }
 
     /// <summary>Draw the session's figures over the game window (#39). Off until asked for.</summary>
     public bool ShowOverlay { get; set; }
+
+    /// <summary>
+    /// Where the overlay sits and how big it draws (#43): anchor, offset and a
+    /// text height as a share of the game window's height. The one place that
+    /// owns overlay geometry; the window resolves it against the game's bounds
+    /// each time it follows them, and the settings page changes it live.
+    /// </summary>
+    public OverlayPlacement Overlay { get; set; } = OverlayPlacement.Default;
 
     /// <summary>One saved rectangle, window-relative physical pixels.</summary>
     public sealed class StoredRegion
@@ -81,7 +91,9 @@ public sealed class Settings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StoredRegion? WarehouseRegion { get; set; }
 
-    /// <summary>Where the overlay sits, in game-window pixels; null is its default spot.</summary>
+    // Builds 0.6.3 through #42 placed the overlay with a picked rectangle. It
+    // is read only so <see cref="MigrateOverlayRegion"/> can say the same
+    // thing as an anchor and an offset, and is scrubbed by that.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StoredRegion? OverlayRegion { get; set; }
 
@@ -116,9 +128,24 @@ public sealed class Settings
         RegionKind.Loot => WindowRegionWidth > 0 && WindowRegionHeight > 0
             ? new Rectangle(WindowRegionX, WindowRegionY, WindowRegionWidth, WindowRegionHeight)
             : null,
-        RegionKind.Overlay => ToRectangle(OverlayRegion),
         _ => ToRectangle(MarketplaceRegion),
     };
+
+    /// <summary>
+    /// Carry a rectangle placement from before #43 into the anchored one, so a
+    /// member who already placed the overlay sees no change. The text size was
+    /// a share of nothing but the rectangle; making it a share of the window
+    /// needs the window's height, which is the tray's to know — the game's own
+    /// window when it is up, else the monitor a borderless client would fill.
+    /// True when something was converted and wants saving.
+    /// </summary>
+    public bool MigrateOverlayRegion(int windowHeight)
+    {
+        if (ToRectangle(OverlayRegion) is not { } legacy) return false;
+        Overlay = OverlayPlacement.FromRegion(legacy, windowHeight);
+        OverlayRegion = null;
+        return true;
+    }
 
     public void SetRegion(RegionKind kind, Rectangle regionInWindow)
     {
@@ -138,9 +165,6 @@ public sealed class Settings
                 WindowRegionHeight = stored.Height;
                 RegionX = RegionY = RegionWidth = RegionHeight = 0; // the migration ends here
                 break;
-            case RegionKind.Overlay:
-                OverlayRegion = stored;
-                break;
             default:
                 MarketplaceRegion = stored;
                 break;
@@ -154,9 +178,6 @@ public sealed class Settings
         {
             case RegionKind.Loot:
                 WindowRegionX = WindowRegionY = WindowRegionWidth = WindowRegionHeight = 0;
-                break;
-            case RegionKind.Overlay:
-                OverlayRegion = null;
                 break;
             default:
                 MarketplaceRegion = null;
@@ -203,6 +224,10 @@ public sealed class Settings
                     settings.WarehouseRegion = null;
                     scrub = true;
                 }
+                // The serializer will hand back null for an explicit null and
+                // whatever numbers a hand edit left; neither may reach the
+                // window, which draws wherever it is told.
+                settings.Overlay = settings.Overlay is null ? OverlayPlacement.Default : settings.Overlay.Clamped();
                 if (scrub) settings.Save();
                 return settings;
             }
