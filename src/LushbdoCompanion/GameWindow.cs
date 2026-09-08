@@ -34,7 +34,7 @@ internal static class GameWindow
                 {
                     var hwnd = process.MainWindowHandle;
                     if (hwnd == IntPtr.Zero || !IsWindowVisible(hwnd)) continue;
-                    var bounds = VisibleBounds(hwnd);
+                    var bounds = BoundsOf(hwnd);
                     if (bounds.Width < 1 || bounds.Height < 1) continue;
                     return new Found(hwnd, bounds);
                 }
@@ -43,7 +43,8 @@ internal static class GameWindow
         return null;
     }
 
-    private static Rectangle VisibleBounds(IntPtr hwnd)
+    /// <summary>The window's visible rectangle in screen pixels, frame shadow excluded — empty when it cannot be read.</summary>
+    public static Rectangle BoundsOf(IntPtr hwnd)
     {
         const uint DwmwaExtendedFrameBounds = 9;
         if (DwmGetWindowAttribute(hwnd, DwmwaExtendedFrameBounds, out var rect, Marshal.SizeOf<RECT>()) != 0

@@ -58,6 +58,14 @@ public sealed class LootSender : IDisposable
     /// <summary>The site said 401 — the token is revoked. Raised once, from a worker thread.</summary>
     public event Action<string>? Revoked;
 
+    /// <summary>
+    /// What the site said about the run on its latest reply: the session a
+    /// batch landed on, or null when it answered that no run is live. Fires
+    /// on the sender's own thread; the overlay (#39) is the listener and
+    /// marshals. It is a level — the same session twice is nothing to act on.
+    /// </summary>
+    public event Action<IngestClient.SessionInfo?>? SessionSeen;
+
     public long SentLines => Interlocked.Read(ref _sentLines);
 
     public LootSender(IngestClient client, Action<string> log)
@@ -188,6 +196,7 @@ public sealed class LootSender : IDisposable
                     : $"drop  {_droppedWhileNotLive} line(s) — no gather session is running, so loot picked up now does not count. Press Start on the site's /gather page.");
             }
             _nextAttempt = now + NotLivePace;
+            SessionSeen?.Invoke(null);
             return true;
         }
 
@@ -237,6 +246,7 @@ public sealed class LootSender : IDisposable
 
         if (!ask) Interlocked.Add(ref _sentLines, batch.Lines.Count);
         _nextAttempt = DateTime.MinValue;
+        if (answer.Session is { } session) SessionSeen?.Invoke(session);
         return true;
     }
 

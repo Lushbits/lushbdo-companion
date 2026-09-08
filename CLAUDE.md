@@ -17,8 +17,11 @@ same ToS class as streaming software. No feature is worth bending them.
 - **Never guess.** Anything ambiguous is the server's to hold and the member's
   to resolve on the site. The app does not correct, fuzzy-match or drop lines.
 - **The site is the product.** Sessions start/stop on the site; the register
-  and held lines live there. The app's only UI beyond pairing is its live log
-  and (milestone b) the region picker.
+  and held lines live there. The app's only UI beyond pairing is its live log,
+  (milestone b) the region picker, and (#39) a two-line session overlay that
+  draws only what the site reports back on an ingest reply — value and pace
+  once bdo#724 ships, the item count and clock until then — as a separate
+  click-through window over the game's rectangle, never anything injected.
 - **Featherweight beside the game.** Gamers notice; no feature is worth frame
   drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
   background is transparent by design (owner decision, #2), so raw pixels
