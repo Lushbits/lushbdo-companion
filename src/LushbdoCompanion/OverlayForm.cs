@@ -28,7 +28,9 @@ namespace LushbdoCompanion;
 /// (owner ruling, 2026-09-09: always before tax; #42 had picked net, and
 /// the overlay and the sheet then showed two numbers for one run). On a
 /// site from before it, or a sheet nothing could be priced on, the item
-/// count and the gathering clock show instead. Hidden whenever there is nothing honest to show — no running
+/// count shows in the value's place; a pace that cannot be shown yet is a
+/// dash, not the clock — the clock in that spot read as strange (owner,
+/// 2026-09-09). Each line has its own size and the order is the member's. Hidden whenever there is nothing honest to show — no running
 /// session, a pause, the game not in front, the game gone — and repainted
 /// only when a figure changes. Following the window is a position query
 /// four times a second and nothing more.
@@ -60,10 +62,13 @@ public sealed class OverlayForm : Form
     public const string SampleValue = "12,345,678";
     public const string SamplePace = "45.6M/h";
 
+    /// <summary>The pace's place while there is no pace to show: the line keeps its spot, and says it is waiting.</summary>
+    private const string NoPace = "–";
+
     /// <summary>
     /// The site's pace is the value over the gathering time, whatever that
     /// time is — its own rule, and it does not extrapolate. Under a couple of
-    /// minutes that figure is one lucky drop scaled to an hour, so the clock
+    /// minutes that figure is one lucky drop scaled to an hour, so a dash
     /// shows until the window is long enough to mean something.
     /// </summary>
     private const long PaceAfterSec = 120;
@@ -75,8 +80,10 @@ public sealed class OverlayForm : Form
     private readonly System.Windows.Forms.Timer _follow;
     private readonly PrivateFontCollection? _fonts;
     private readonly IntPtr _fontMemory;
-    private Font _font;
-    private float _fontPx;
+    private Font _valueFont;
+    private Font _paceFont;
+    private float _valuePx;
+    private float _pacePx;
 
     private OverlayPlacement _placement;
     private string _line1 = "";
@@ -108,9 +115,10 @@ public sealed class OverlayForm : Form
         (_fonts, _fontMemory) = LoadTypeface();
         _placement = placement;
         // Sized for nothing yet: the first follow that sees the game window
-        // remakes this at the size the placement says for that window.
-        _fontPx = 0;
-        _font = MakeFont(1);
+        // remakes these at the sizes the placement says for that window.
+        _valuePx = _pacePx = 0;
+        _valueFont = MakeFont(1);
+        _paceFont = MakeFont(1);
 
         _ = Handle; // the layered window exists before the first figure arrives
         _follow = new System.Windows.Forms.Timer { Interval = (int)FollowPace.TotalMilliseconds };
@@ -164,7 +172,8 @@ public sealed class OverlayForm : Form
     /// twice are nothing to repaint. Gross is the figure shown — the same
     /// one as the site's headline, before the market's cut — and a value the
     /// site could not put on the sheet gives way to the item count rather
-    /// than reading as zero.
+    /// than reading as zero. A pace there is not one of yet — the run too
+    /// young, or a site that sends none — is a dash in the pace's place.
     /// </summary>
     public void Report(IngestClient.SessionInfo? session)
     {
@@ -179,7 +188,7 @@ public sealed class OverlayForm : Form
         {
             null => "",
             { SilverPerHourGross: { } pace, ElapsedSec: >= PaceAfterSec } => Compact(pace) + "/h",
-            { } s => Elapsed(s.ElapsedSec),
+            _ => NoPace,
         };
         if (live == _live && line1 == _line1 && line2 == _line2) return;
         _live = live;
@@ -242,16 +251,25 @@ public sealed class OverlayForm : Form
             return;
         }
 
-        // The text size is a share of the window's height, so a resized
+        // The text sizes are shares of the window's height, so a resized
         // client or a changed setting is a new font; a window that only moved
         // is not.
-        var px = _placement.TextPx(bounds.Size);
-        if (px != _fontPx)
+        var valuePx = _placement.TextPx(bounds.Size);
+        if (valuePx != _valuePx)
         {
-            var font = MakeFont(px);
-            _font.Dispose();
-            _font = font;
-            _fontPx = px;
+            var font = MakeFont(valuePx);
+            _valueFont.Dispose();
+            _valueFont = font;
+            _valuePx = valuePx;
+            _dirty = true;
+        }
+        var pacePx = _placement.PaceTextPx(bounds.Size);
+        if (pacePx != _pacePx)
+        {
+            var font = MakeFont(pacePx);
+            _paceFont.Dispose();
+            _paceFont = font;
+            _pacePx = pacePx;
             _dirty = true;
         }
 
@@ -357,23 +375,33 @@ public sealed class OverlayForm : Form
     private void Render()
     {
         _dirty = false;
-        var lines = _preview ? new[] { SampleValue, SamplePace } : new[] { _line1, _line2 };
-        var outline = Math.Max(2f, _font.Size / 9);
+        // Two lines, each in its own size, in the member's order. Each keeps
+        // its place even when empty, so nothing jumps when a figure arrives.
+        var value = (Text: _preview ? SampleValue : _line1, Font: _valueFont);
+        var pace = (Text: _preview ? SamplePace : _line2, Font: _paceFont);
+        var lines = _placement.PaceFirst ? new[] { pace, value } : new[] { value, pace };
+        // The outline scales with the larger face; the padding leaves room for it.
+        var outline = Math.Max(2f, Math.Max(_valueFont.Size, _paceFont.Size) / 9);
         var pad = outline + 2;
 
-        float width;
-        float lineHeight;
+        var widths = new float[lines.Length];
+        var heights = new float[lines.Length];
+        float width = 0, height = 0;
         using (var measure = Graphics.FromHwnd(IntPtr.Zero))
         {
             measure.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            lineHeight = _font.GetHeight(measure);
-            width = 0;
-            foreach (var line in lines)
-                if (line.Length > 0) width = Math.Max(width, measure.MeasureString(line, _font, PointF.Empty, StringFormat.GenericTypographic).Width);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                heights[i] = lines[i].Font.GetHeight(measure);
+                height += heights[i];
+                if (lines[i].Text.Length == 0) continue;
+                widths[i] = measure.MeasureString(lines[i].Text, lines[i].Font, PointF.Empty, StringFormat.GenericTypographic).Width;
+                width = Math.Max(width, widths[i]);
+            }
         }
 
         var w = Math.Max(1, (int)Math.Ceiling(width + pad * 2));
-        var h = Math.Max(1, (int)Math.Ceiling(lineHeight * lines.Length + pad * 2));
+        var h = Math.Max(1, (int)Math.Ceiling(height + pad * 2));
         using var bitmap = new Bitmap(w, h, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bitmap))
         {
@@ -391,11 +419,22 @@ public sealed class OverlayForm : Form
             // in 0, 6, 8 and 9 open.
             using var path = new GraphicsPath { FillMode = FillMode.Winding };
             var y = pad;
-            foreach (var line in lines)
+            for (var i = 0; i < lines.Length; i++)
             {
-                if (line.Length > 0)
-                    path.AddString(line, _font.FontFamily, (int)_font.Style, _font.Size, new PointF(pad, y), StringFormat.GenericTypographic);
-                y += lineHeight;
+                var (text, font) = lines[i];
+                if (text.Length > 0)
+                {
+                    // Lines of two sizes line up the way the anchor does: on
+                    // the edge they hang from, or on each other's centre.
+                    var x = _placement.Column switch
+                    {
+                        0 => pad,
+                        1 => pad + (width - widths[i]) / 2,
+                        _ => pad + width - widths[i],
+                    };
+                    path.AddString(text, font.FontFamily, (int)font.Style, font.Size, new PointF(x, y), StringFormat.GenericTypographic);
+                }
+                y += heights[i];
             }
             using var pen = new Pen(Color.FromArgb(210, 0, 0, 0), outline * 2) { LineJoin = LineJoin.Round };
             g.DrawPath(pen, path);
@@ -438,9 +477,6 @@ public sealed class OverlayForm : Form
         >= 1_000 => (value / 1e3).ToString("0", Inv) + "K",
         _ => value.ToString(Inv),
     };
-
-    private static string Elapsed(long seconds) =>
-        TimeSpan.FromSeconds(Math.Max(0, seconds)).ToString(seconds >= 3600 ? @"h\:mm\:ss" : @"m\:ss", Inv);
 
     /// <summary>
     /// Pearl.ttf, embedded beside the icon (PR #40): Inter SemiBold under the
@@ -488,7 +524,8 @@ public sealed class OverlayForm : Form
         {
             _follow.Stop();
             _follow.Dispose();
-            _font.Dispose();
+            _valueFont.Dispose();
+            _paceFont.Dispose();
             _fonts?.Dispose();
             if (_fontMemory != IntPtr.Zero) Marshal.FreeHGlobal(_fontMemory);
         }
