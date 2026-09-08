@@ -41,6 +41,14 @@
     <!-- ...and the same file again, inside the exe, because the tray icon is
          set at runtime and the release stays one download. -->
     <EmbeddedResource Include="lushbdo.ico" LogicalName="LushbdoCompanion.lushbdo.ico" />
+    <!-- The overlay's typeface (#39). The file is named for the site's Pearl
+         look, and inside it is Inter SemiBold 3.012 by Rasmus Andersson under
+         the SIL Open Font License 1.1 — its name table carries the copyright
+         and licence, which is what the OFL asks of a bundled copy. It rides
+         inside the exe like the icon, loaded at runtime into a private font
+         collection: nothing is installed on the member's machine, and the
+         release stays one download. The family it registers as is "Inter". -->
+    <EmbeddedResource Include="Pearl.ttf" LogicalName="LushbdoCompanion.Pearl.ttf" />
   </ItemGroup>
 
   <ItemGroup>
