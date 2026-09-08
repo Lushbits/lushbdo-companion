@@ -16,14 +16,6 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     private readonly LogWindow _log = new();
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
-    private readonly ToolStripMenuItem _traceItem;
-    private readonly ToolStripMenuItem _silverOnlyItem;
-
-    // Both rectangles live in one submenu and each says what it is set to,
-    // because "which of these did I actually pick, and where?" was a question
-    // the menu could not answer and the log could only answer at startup.
-    private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _regionItems = [];
-    private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _forgetItems = [];
     private LootWatcher? _watcher;
     private LootSender? _sender;
     private SilverSender? _silver;
@@ -42,59 +34,15 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
             Enabled = CanWatch
         };
 
-        _traceItem = new ToolStripMenuItem("Trace OCR to file", null, (_, _) => ToggleTrace())
-        {
-            Checked = _settings.TraceOcr
-        };
-
-        // One place for both rectangles, each showing what it is set to. The
-        // silver one is optional and the app never nags for it; the loot one is
-        // optional too under "Watch silver only", which is the whole point of
-        // that mode.
-        var regions = new ToolStripMenuItem("Watched regions");
-        foreach (var kind in RegionKinds)
-        {
-            var item = new ToolStripMenuItem("", null, async (_, _) => await PickRegionAsync(kind))
-            {
-                ToolTipText = kind == Settings.RegionKind.Loot
-                    ? "Click to pick the loot chat rectangle. Drag it around the chat text."
-                    : "Open the Central Market in-game first, then click. Drag around its Warehouse Balance " +
-                      "figure and keep buttons out of the rectangle — a hover overlay can cover the digits.",
-            };
-            _regionItems[kind] = item;
-            regions.DropDownItems.Add(item);
-        }
-        regions.DropDownItems.Add(new ToolStripSeparator());
-        foreach (var kind in RegionKinds)
-        {
-            var item = new ToolStripMenuItem($"Forget {RegionName(kind).ToLowerInvariant()}", null,
-                async (_, _) => await ForgetRegionAsync(kind));
-            _forgetItems[kind] = item;
-            regions.DropDownItems.Add(item);
-        }
-
-        _silverOnlyItem = new ToolStripMenuItem("Watch silver only (much lighter)", null, async (_, _) => await ToggleSilverOnlyAsync())
-        {
-            Checked = _settings.SilverOnly,
-            ToolTipText = "Skip the loot log entirely and read only the silver rectangle. The loot log is what " +
-                          "costs CPU — it keys every frame and reads the chat — so this is far lighter on a laptop.",
-        };
-
-        // The session overlay (#39) — two figures over the game while a session
-        // runs — is switched on and placed in the settings window (#43), where
-        // the overlay itself is the preview; the tray only opens that page.
-        var menu = new ContextMenuStrip { ShowItemToolTips = true };
-        menu.Items.Add("Open log", null, (_, _) => ShowLog());
-        menu.Items.Add(regions);
-        menu.Items.Add(_silverOnlyItem);
-        menu.Items.Add("Session overlay…", null, (_, _) => ShowSettings(SettingsForm.Page.Overlay));
+        // The shortest list the tray can be (#43): what is done in the moment.
+        // Everything that is a setting — the pairing, the rectangles and
+        // silver-only, the overlay, tracing and the update check — lives in
+        // the settings window, with pages down its left, where each says what
+        // it is set to and why it exists. The tray had grown too long to skim.
+        var menu = new ContextMenuStrip();
         menu.Items.Add(_watchItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
+        menu.Items.Add("Open log", null, (_, _) => ShowLog());
         menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
-        menu.Items.Add("Send test batch", null, async (_, _) => await SendTestBatchAsync());
-        menu.Items.Add(_traceItem);
-        menu.Items.Add("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit", null, (_, _) => Quit());
 
@@ -108,8 +56,6 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         };
         _icon.DoubleClick += (_, _) => ShowLog();
         _icon.BalloonTipClicked += (_, _) => OpenReleasesPage();
-
-        RefreshRegionMenu();
 
         _log.Append($"LushBDO Companion {UpdateChecker.Current.ToString(3)} started.");
         _log.Append(_settings.IsPaired
@@ -158,26 +104,8 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     private static readonly Settings.RegionKind[] RegionKinds =
         [Settings.RegionKind.Loot, Settings.RegionKind.Marketplace];
 
-    /// <summary>
-    /// Put every rectangle's current state on its own menu item — set or not,
-    /// and exactly where. The pixels are there because they are the only way
-    /// to tell two rectangles apart at a glance when one of them is aimed
-    /// wrong, which is the thing that actually goes wrong (#22 field session).
-    /// </summary>
-    private void RefreshRegionMenu()
-    {
-        foreach (var kind in RegionKinds)
-        {
-            var rect = _settings.RegionFor(kind);
-            _regionItems[kind].Text = rect is { } r
-                ? $"{RegionName(kind)} — {r.Width}×{r.Height} at ({r.X}, {r.Y})"
-                : $"{RegionName(kind)} — not picked yet";
-            _regionItems[kind].Checked = rect is not null;
-            if (_forgetItems.TryGetValue(kind, out var forget)) forget.Enabled = rect is not null;
-        }
-        _watchItem.Enabled = CanWatch;
-        _silverOnlyItem.Checked = _settings.SilverOnly;
-    }
+    /// <summary>The one thing on the tray that depends on the settings: whether there is anything to watch.</summary>
+    private void RefreshWatchItem() => _watchItem.Enabled = CanWatch;
 
     /// <summary>
     /// What "Start watching" needs: in silver-only the balance rectangle is
@@ -193,16 +121,15 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         if (_settings.SilverOnly)
         {
             _log.Append(_settings.BalanceRegion is null
-                ? "Silver only is on, but no silver rectangle is picked — Watched regions → Marketplace silver."
+                ? "Silver only is on, but no silver rectangle is picked — Settings → Regions → Marketplace silver."
                 : "Silver only is on — the loot log is not read at all.");
         }
         else if (_settings.RegionFor(Settings.RegionKind.Loot) is null)
         {
             _log.Append(_settings.HasScreenRelativeRegion
                 ? "Capture is tied to the game window now, and the old screen-relative region cannot be carried " +
-                  "over — right-click the tray icon → Watched regions → Loot log, once more."
-                : "No loot log region yet — right-click the tray icon → Watched regions → Loot log, while the game " +
-                  "shows its loot chat.");
+                  "over — Settings → Regions → Loot log, once more."
+                : "No loot log region yet — Settings → Regions → Loot log, while the game shows its loot chat.");
         }
         foreach (var kind in RegionKinds)
         {
@@ -229,8 +156,8 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     /// The picker's instruction. A balance rectangle has a failure the loot
     /// one does not: the still is the game *as it is right now*, so there is
     /// nothing to drag a rectangle around unless the panel was already open
-    /// when the tray menu was used. That failure is silent and confusing, so
-    /// the picker says it out loud (#22).
+    /// when Pick was clicked. That failure is silent and confusing, so the
+    /// picker says it out loud (#22).
     /// </summary>
     private static string PickerHint(Settings.RegionKind kind) => kind switch
     {
@@ -262,7 +189,9 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
             $"Yes: pick {RegionName(kind).ToLowerInvariant()} on the live screen.   No: cancel.",
             "LushBDO Companion", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
 
-    private async Task PickRegionAsync(Settings.RegionKind kind)
+    // --- What the settings window asks of the tray ------------------------
+
+    public async Task PickRegionAsync(Settings.RegionKind kind)
     {
         var wasWatching = _watcher is not null;
         if (wasWatching) StopWatching("Stopped watching while the region is re-picked.");
@@ -270,7 +199,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         // The normal path: photograph one frame of the game's own window and
         // pick on that still. The game can sit buried under other windows —
         // the compositor serves its surface regardless, so there is no
-        // arranging of windows before opening the tray menu.
+        // arranging of windows before clicking Pick.
         Rectangle? region = null;
         if (GameWindow.Find() is { } game)
         {
@@ -332,7 +261,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
 
         _settings.SetRegion(kind, region.Value);
         _settings.Save();
-        RefreshRegionMenu();
+        RefreshWatchItem();
         _log.Append($"Region · {RegionName(kind)} set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
         if (!_watchItem.Enabled)
         {
@@ -361,10 +290,10 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     /// (#22, 2026-08-30): watching is **all or nothing**, there is no
     /// silver-only mode and no per-region toggle, and removing the region is
     /// what turns a rectangle off. That closes the issue's open question about
-    /// whether the balance should ride the same toggle — it does, and this
-    /// menu is the whole of the control surface.
+    /// whether the balance should ride the same toggle — it does, and the
+    /// Regions page is the whole of the control surface.
     /// </summary>
-    private async Task ForgetRegionAsync(Settings.RegionKind kind)
+    public async Task ForgetRegionAsync(Settings.RegionKind kind)
     {
         if (_settings.RegionFor(kind) is null)
         {
@@ -375,7 +304,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         if (wasWatching) StopWatching($"Stopped watching while {RegionName(kind).ToLowerInvariant()} is dropped.");
         _settings.ForgetRegion(kind);
         _settings.Save();
-        RefreshRegionMenu();
+        RefreshWatchItem();
         _log.Append($"Region · {RegionName(kind)} forgotten — it is no longer read.");
 
         if (kind == Settings.RegionKind.Loot)
@@ -545,8 +474,6 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         _overlay = null;
     }
 
-    // --- What the settings window asks of the tray ------------------------
-
     public void PreviewOverlay(bool on)
     {
         _previewing = on;
@@ -596,11 +523,9 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     /// at once rather than at the next watch, because a member who reaches for
     /// it wants the CPU back now.
     /// </summary>
-    private async Task ToggleSilverOnlyAsync()
+    public async Task SilverOnlyChanged()
     {
-        _settings.SilverOnly = !_settings.SilverOnly;
-        _settings.Save();
-        RefreshRegionMenu();
+        RefreshWatchItem();
 
         var wasWatching = _watcher is not null;
         if (wasWatching) StopWatching(_settings.SilverOnly
@@ -610,8 +535,8 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         if (!CanWatch)
         {
             _log.Append(_settings.SilverOnly
-                ? "Silver only is on, but no silver rectangle is picked — Watched regions → Marketplace silver."
-                : "No loot log region is picked — Watched regions → Loot log.");
+                ? "Silver only is on, but no silver rectangle is picked — Settings → Regions → Marketplace silver."
+                : "No loot log region is picked — Settings → Regions → Loot log.");
             return;
         }
         if (wasWatching) await StartWatchingAsync();
@@ -620,14 +545,13 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
             : "Silver only is off. Start watching to read the loot log as well.");
     }
 
-    private void ToggleTrace()
+    public void TraceChanged()
     {
-        _settings.TraceOcr = !_settings.TraceOcr;
-        _settings.Save();
-        _traceItem.Checked = _settings.TraceOcr;
         if (_watcher is not null) _watcher.SetTracing(_settings.TraceOcr);
         else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
     }
+
+    public Task CheckForUpdatesAsync() => CheckForUpdatesAsync(manual: true);
 
     /// <summary>
     /// One settings window, modeless: the log stays readable and the tray
@@ -648,7 +572,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         form.Show();
     }
 
-    private async Task SendTestBatchAsync()
+    public async Task SendTestBatchAsync()
     {
         var batch = IngestClient.TestBatch();
         _log.Append($"Sending test batch '{batch.BatchId}' ({batch.Lines.Count} lines) to {_settings.BaseUrl} …");
@@ -706,9 +630,6 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
 
     private static void OpenReleasesPage() =>
         Process.Start(new ProcessStartInfo(UpdateChecker.ReleasesPage) { UseShellExecute = true });
-
-    private void OpenSite() =>
-        Process.Start(new ProcessStartInfo(_settings.BaseUrl) { UseShellExecute = true });
 
     private void Quit()
     {

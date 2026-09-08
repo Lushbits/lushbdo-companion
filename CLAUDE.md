@@ -173,7 +173,8 @@ and wrong once there was a benefit on the other side of it; the mode keeps the
 loot rectangle saved so switching back is a click rather than a re-pick. What
 survives from that morning is the rest: one capture serves every rectangle, and
 removing a region is still how you stop watching it, which is why every region
-including the loot log has its own Forget in the tray's `Watched regions` menu. And **one balance rectangle,
+including the loot log has its own Forget on the settings window's Regions page
+(the tray's `Watched regions` menu until #43). And **one balance rectangle,
 on the Central Market panel**, not two. The two-rectangle cross-check was the
 only thing that could see an occluded read, and it was dropped knowingly: the
 warehouse panel's Withdraw hover overlay covers the last digit group (field,
