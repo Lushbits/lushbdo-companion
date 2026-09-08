@@ -21,9 +21,10 @@ namespace LushbdoCompanion;
 ///
 /// The figures are levels, like the silver balance: they are whatever the
 /// site last reported on an ingest reply, and the app posts exactly when the
-/// value changes, so nothing polls. Until the site carries a value
-/// (bdo#724) the reply has an item count and gathering time, and that is
-/// what shows. Hidden whenever there is nothing honest to show — no running
+/// value changes, so nothing polls. The site values the run itself
+/// (bdo#724, shipped in bdo#725) and this draws the net figures; on a
+/// site from before it, or a sheet nothing could be priced on, the item
+/// count and the gathering clock show instead. Hidden whenever there is nothing honest to show — no running
 /// session, a pause, the game not in front, the game gone — and repainted
 /// only when a figure changes. Following the window is a position query
 /// four times a second and nothing more.
@@ -40,6 +41,14 @@ public sealed class OverlayForm : Form
     private const float MinTextPx = 12;
     private const float MaxTextPx = 56;
     private const int DefaultTopMargin = 6;
+
+    /// <summary>
+    /// The site's pace is the value over the gathering time, whatever that
+    /// time is — its own rule, and it does not extrapolate. Under a couple of
+    /// minutes that figure is one lucky drop scaled to an hour, so the clock
+    /// shows until the window is long enough to mean something.
+    /// </summary>
+    private const long PaceAfterSec = 120;
 
     private static readonly TimeSpan FollowPace = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan FindPace = TimeSpan.FromSeconds(5);
@@ -111,7 +120,9 @@ public sealed class OverlayForm : Form
     /// <summary>
     /// What the site said about the session on its latest reply; null when
     /// it said the run is not live. Levels, not events: the same figures
-    /// twice are nothing to repaint.
+    /// twice are nothing to repaint. Net is the figure shown — what the
+    /// member would actually bank — and a value the site could not put on
+    /// the sheet gives way to the item count rather than reading as zero.
     /// </summary>
     public void Report(IngestClient.SessionInfo? session)
     {
@@ -119,13 +130,13 @@ public sealed class OverlayForm : Form
         var line1 = session switch
         {
             null => "",
-            { Value: { } value } => Silver(value),
+            { ValueNet: { } value } => Silver(value),
             { } s => $"{s.Items} item{(s.Items == 1 ? "" : "s")}",
         };
         var line2 = session switch
         {
             null => "",
-            { PerHour: { } pace } => Compact(pace) + "/h",
+            { SilverPerHourNet: { } pace, ElapsedSec: >= PaceAfterSec } => Compact(pace) + "/h",
             { } s => Elapsed(s.ElapsedSec),
         };
         if (live == _live && line1 == _line1 && line2 == _line2) return;

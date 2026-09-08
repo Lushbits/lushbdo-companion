@@ -46,11 +46,18 @@ public sealed class IngestClient(Settings settings)
         [property: JsonPropertyName("elapsedSec")] long ElapsedSec,
         [property: JsonPropertyName("items")] int Items,
         [property: JsonPropertyName("liveSinceSec")] long? LiveSinceSec = null,
-        // What the run is worth so far and its pace, whole silver, on the
-        // basis the session page shows (bdo#724). Absent on a site from
-        // before it; the overlay (#39) shows the count and the clock then.
-        [property: JsonPropertyName("value")] long? Value = null,
-        [property: JsonPropertyName("perHour")] long? PerHour = null);
+        // What the run is worth so far and its pace, whole silver, valued on
+        // the live market the way the session page values it (bdo#724,
+        // shipped in bdo#725): gross, and net of the member's own market
+        // tax. Null is "nothing on the sheet could be valued", never zero,
+        // and `unvaluedRows` says how many rows that left out. Absent on a
+        // site from before it; the overlay (#39) shows the count and the
+        // clock then.
+        [property: JsonPropertyName("valueGross")] long? ValueGross = null,
+        [property: JsonPropertyName("valueNet")] long? ValueNet = null,
+        [property: JsonPropertyName("silverPerHourGross")] long? SilverPerHourGross = null,
+        [property: JsonPropertyName("silverPerHourNet")] long? SilverPerHourNet = null,
+        [property: JsonPropertyName("unvaluedRows")] int UnvaluedRows = 0);
 
     public sealed record MatchedLine(
         [property: JsonPropertyName("line")] string LineText,
