@@ -151,9 +151,52 @@ public class OverlayPlacementTests
     [Fact]
     public void Round_trips_through_json_with_the_anchor_by_name()
     {
-        var placement = new OverlayPlacement(OverlayAnchor.BottomRight, 24, 32, 2.5);
+        var placement = new OverlayPlacement(OverlayAnchor.BottomRight, 24, 32, 2.5, 1.2, PaceFirst: true);
         var json = JsonSerializer.Serialize(placement);
         Assert.Contains("\"Anchor\":\"BottomRight\"", json);
+        Assert.Contains("\"PaceFirst\":true", json);
         Assert.Equal(placement, JsonSerializer.Deserialize<OverlayPlacement>(json));
+    }
+
+    [Fact]
+    public void A_file_from_before_the_pace_had_its_own_size_reads_with_the_defaults()
+    {
+        // Exactly what 0.7.0–0.7.3 wrote under "Overlay".
+        const string json = """{"Anchor":"BottomRight","OffsetX":24,"OffsetY":24,"TextPct":2.5}""";
+        var placement = JsonSerializer.Deserialize<OverlayPlacement>(json)!;
+        Assert.Equal(new OverlayPlacement(OverlayAnchor.BottomRight, 24, 24, 2.5), placement);
+        Assert.Equal(OverlayPlacement.DefaultPaceTextPct, placement.PaceTextPct);
+        Assert.False(placement.PaceFirst);
+    }
+
+    [Fact]
+    public void The_pace_defaults_a_little_smaller_than_the_value_and_has_its_own_size()
+    {
+        Assert.True(OverlayPlacement.Default.PaceTextPct < OverlayPlacement.Default.TextPct);
+        var window = new Size(1920, 1080);
+        Assert.Equal(22, OverlayPlacement.Default.TextPx(window));
+        Assert.Equal(17, OverlayPlacement.Default.PaceTextPx(window)); // 17.28 → 17
+        var bigPace = OverlayPlacement.Default with { PaceTextPct = 4.0 };
+        Assert.Equal(43, bigPace.PaceTextPx(window));
+        Assert.Equal(22, bigPace.TextPx(window)); // the other line is untouched
+    }
+
+    [Fact]
+    public void Clamped_keeps_the_pace_size_in_bounds_too()
+    {
+        Assert.Equal(OverlayPlacement.MaxTextPct, (OverlayPlacement.Default with { PaceTextPct = 50 }).Clamped().PaceTextPct);
+        Assert.Equal(OverlayPlacement.MinTextPct, (OverlayPlacement.Default with { PaceTextPct = 0 }).Clamped().PaceTextPct);
+        Assert.Equal(OverlayPlacement.DefaultPaceTextPct, (OverlayPlacement.Default with { PaceTextPct = double.NaN }).Clamped().PaceTextPct);
+    }
+
+    [Fact]
+    public void A_drag_keeps_the_sizes_and_the_order()
+    {
+        var before = new OverlayPlacement(OverlayAnchor.TopCentre, 0, 6, 3.0, 1.0, PaceFirst: true);
+        var after = before.At(Window, Painted, new Point(1700, 1000));
+        Assert.Equal(OverlayAnchor.BottomRight, after.Anchor);
+        Assert.Equal(3.0, after.TextPct);
+        Assert.Equal(1.0, after.PaceTextPct);
+        Assert.True(after.PaceFirst);
     }
 }

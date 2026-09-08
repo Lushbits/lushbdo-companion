@@ -90,8 +90,12 @@ public sealed class SettingsForm : Form
     private readonly RadioButton[] _anchors;
     private readonly NumericUpDown _offsetX;
     private readonly NumericUpDown _offsetY;
-    private readonly TrackBar _size;     // tenths of a percent
-    private readonly Label _sizeValue;
+    private readonly TrackBar _valueSize;   // tenths of a percent
+    private readonly Label _valueSizeValue;
+    private readonly TrackBar _paceSize;
+    private readonly Label _paceSizeValue;
+    private readonly RadioButton _valueFirst;
+    private readonly RadioButton _paceFirst;
     private readonly Label _previewNote;
 
     // Diagnostics
@@ -110,7 +114,7 @@ public sealed class SettingsForm : Form
         // DPI aware for the capture side.
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96f, 96f);
-        ClientSize = new Size(640, 404);
+        ClientSize = new Size(640, 460);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -118,7 +122,7 @@ public sealed class SettingsForm : Form
 
         _pages = new ListBox
         {
-            Left = 12, Top = 12, Width = 120, Height = 340,
+            Left = 12, Top = 12, Width = 120, Height = 396,
             IntegralHeight = false,
             ItemHeight = 24,
             DrawMode = DrawMode.OwnerDrawFixed,
@@ -130,7 +134,7 @@ public sealed class SettingsForm : Form
         // The window is modeless, and a DialogResult closes only a modal one —
         // which is how 0.7.0–0.7.2 shipped a Close button that did nothing. The
         // button closes the window itself; CancelButton keeps Esc on it.
-        var close = new Button { Text = "Close", Left = 553, Top = 366, Width = 75 };
+        var close = new Button { Text = "Close", Left = 553, Top = 422, Width = 75 };
         close.Click += (_, _) => Close();
         CancelButton = close;
 
@@ -261,35 +265,46 @@ public sealed class SettingsForm : Form
         _offsetY.ValueChanged += (_, _) => { if (!_loading) Apply(p => p with { OffsetY = (int)_offsetY.Value }); };
         var offsetNote = Note("Pixels in from the anchored edge; right and down from the centre.", 260, 184, 220, 40);
 
-        // A slider, not a spinner (owner ask): the size is the one number
-        // here that is felt rather than known, and the figures on the game
-        // follow the thumb as it moves. Tenths of a percent.
-        var sizeLabel = new Label { Text = "Size", Left = 0, Top = 224, Width = 70 };
-        _size = new TrackBar
+        // Sliders, not spinners (owner ask): a size is felt rather than known,
+        // and the figures on the game follow the thumb as it moves. One per
+        // line, in tenths of a percent, because the pace reads best a little
+        // smaller than the value.
+        var valueSizeLabel = new Label { Text = "Value size", Left = 0, Top = 224, Width = 70 };
+        (_valueSize, _valueSizeValue) = Slider(216);
+        _valueSize.ValueChanged += (_, _) =>
         {
-            Left = 72, Top = 216, Width = 290, Height = 32, AutoSize = false,
-            Minimum = (int)(OverlayPlacement.MinTextPct * 10), Maximum = (int)(OverlayPlacement.MaxTextPct * 10),
-            TickFrequency = 5, SmallChange = 1, LargeChange = 5,
+            _valueSizeValue.Text = $"{_valueSize.Value / 10.0:0.0} % of height";
+            if (!_loading) Apply(p => p with { TextPct = _valueSize.Value / 10.0 });
         };
-        _sizeValue = new Label { Left = 366, Top = 224, Width = 114 };
-        _size.ValueChanged += (_, _) =>
+        var paceSizeLabel = new Label { Text = "Pace size", Left = 0, Top = 258, Width = 70 };
+        (_paceSize, _paceSizeValue) = Slider(250);
+        _paceSize.ValueChanged += (_, _) =>
         {
-            _sizeValue.Text = $"{_size.Value / 10.0:0.0} % of height";
-            if (!_loading) Apply(p => p with { TextPct = _size.Value / 10.0 });
+            _paceSizeValue.Text = $"{_paceSize.Value / 10.0:0.0} % of height";
+            if (!_loading) Apply(p => p with { PaceTextPct = _paceSize.Value / 10.0 });
         };
 
-        var reset = new Button { Text = "Back to the default spot", Left = 72, Top = 260, Width = 170 };
+        var orderLabel = new Label { Text = "Order", Left = 0, Top = 292, Width = 70 };
+        _valueFirst = new RadioButton { Text = "Value, then pace", Left = 72, Top = 290, AutoSize = true };
+        _paceFirst = new RadioButton { Text = "Pace, then value", Left = 210, Top = 290, AutoSize = true };
+        _paceFirst.CheckedChanged += (_, _) =>
+        {
+            if (!_loading) Apply(p => p with { PaceFirst = _paceFirst.Checked });
+        };
+
+        var reset = new Button { Text = "Back to the defaults", Left = 72, Top = 322, Width = 170 };
         reset.Click += (_, _) =>
         {
             LoadPlacement(OverlayPlacement.Default);
             Apply(_ => OverlayPlacement.Default);
         };
 
-        _previewNote = Note("", 0, 300, 480, 40);
+        _previewNote = Note("", 0, 356, 480, 40);
 
         var overlay = NewPage(Page.Overlay);
         overlay.Controls.AddRange([_show, showNote, anchorLabel, anchorNote, offsetLabel, xLabel, _offsetX, yLabel, _offsetY,
-            offsetNote, sizeLabel, _size, _sizeValue, reset, _previewNote]);
+            offsetNote, valueSizeLabel, _valueSize, _valueSizeValue, paceSizeLabel, _paceSize, _paceSizeValue,
+            orderLabel, _valueFirst, _paceFirst, reset, _previewNote]);
         overlay.Controls.AddRange(_anchors);
 
         // --- Diagnostics -----------------------------------------------------
@@ -340,7 +355,7 @@ public sealed class SettingsForm : Form
 
     private Panel NewPage(Page page)
     {
-        var panel = new Panel { Left = 148, Top = 12, Width = 480, Height = 340, Visible = false };
+        var panel = new Panel { Left = 148, Top = 12, Width = 480, Height = 396, Visible = false };
         _panels[page] = panel;
         return panel;
     }
@@ -355,6 +370,18 @@ public sealed class SettingsForm : Form
         Left = left, Top = top, Width = 64, Minimum = min, Maximum = max, DecimalPlaces = decimals,
         TextAlign = HorizontalAlignment.Right,
     };
+
+    /// <summary>A text-size slider over the placement's range, in tenths of a percent, and the label that reads it out.</summary>
+    private static (TrackBar Bar, Label Value) Slider(int top) => (
+        new TrackBar
+        {
+            Left = 72, Top = top, Width = 290, Height = 32, AutoSize = false,
+            Minimum = (int)(OverlayPlacement.MinTextPct * 10), Maximum = (int)(OverlayPlacement.MaxTextPct * 10),
+            TickFrequency = 5, SmallChange = 1, LargeChange = 5,
+        },
+        new Label { Left = 366, Top = top + 8, Width = 114 });
+
+    private static int Tenths(TrackBar bar, double pct) => Math.Clamp((int)Math.Round(pct * 10), bar.Minimum, bar.Maximum);
 
     /// <summary>
     /// One of the tray's actions, from a button: the button is down while it
@@ -443,8 +470,12 @@ public sealed class SettingsForm : Form
             foreach (var cell in _anchors) cell.Checked = (OverlayAnchor)cell.Tag! == placement.Anchor;
             _offsetX.Value = placement.OffsetX;
             _offsetY.Value = placement.OffsetY;
-            _size.Value = Math.Clamp((int)Math.Round(placement.TextPct * 10), _size.Minimum, _size.Maximum);
-            _sizeValue.Text = $"{_size.Value / 10.0:0.0} % of height";
+            _valueSize.Value = Tenths(_valueSize, placement.TextPct);
+            _valueSizeValue.Text = $"{_valueSize.Value / 10.0:0.0} % of height";
+            _paceSize.Value = Tenths(_paceSize, placement.PaceTextPct);
+            _paceSizeValue.Text = $"{_paceSize.Value / 10.0:0.0} % of height";
+            _paceFirst.Checked = placement.PaceFirst;
+            _valueFirst.Checked = !placement.PaceFirst;
         }
         finally
         {
