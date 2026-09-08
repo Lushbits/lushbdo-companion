@@ -194,7 +194,8 @@ border around the game window is unavoidable there, same as with OBS.
 
 Two figures over the game while a session runs: what the session is worth so
 far and its pace in silver per hour, as the site reports them on each reply —
-the net figures, what you would bank. On a site from before it priced runs, or
+the full value at current prices, before the market's cut, which is the figure
+the site's own **Worth so far** shows. On a site from before it priced runs, or
 a sheet nothing could be priced on, the item count and the gathering clock show
 instead. Nothing else is on it, and it shows only while the site says a session
 is live and the game is the window in front.
