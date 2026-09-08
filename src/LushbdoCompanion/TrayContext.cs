@@ -467,7 +467,18 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     {
         if (_previewing || (_settings.ShowOverlay && _sender is not null))
         {
-            _overlay ??= new OverlayForm(_settings.Overlay);
+            if (_overlay is null)
+            {
+                _overlay = new OverlayForm(_settings.Overlay);
+                // A drag in a preview is a placement made on the game itself:
+                // saved like one made on the page, and shown back on the page.
+                _overlay.Placed += placement =>
+                {
+                    _settings.Overlay = placement;
+                    _settings.Save();
+                    _settingsWindow?.ShowPlacement(placement);
+                };
+            }
             return;
         }
         _overlay?.Dispose();

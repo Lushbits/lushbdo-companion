@@ -76,6 +76,36 @@ public sealed record OverlayPlacement(
     private int Row => (int)Anchor / 3;    // 0 top, 1 middle, 2 bottom
 
     /// <summary>
+    /// Where a drag left the figures, said as a placement: the anchor is the
+    /// cell of the window's thirds the painted bitmap's centre landed in — so
+    /// figures dropped near a corner hang from that corner and survive the
+    /// window changing shape — and the offset is whatever puts the bitmap
+    /// exactly there under that anchor. <see cref="Resolve"/> of the result
+    /// gives the point back; the size is untouched.
+    /// </summary>
+    public OverlayPlacement At(Rectangle window, Size painted, Point at)
+    {
+        var column = Third(at.X + painted.Width / 2 - window.Left, window.Width);
+        var row = Third(at.Y + painted.Height / 2 - window.Top, window.Height);
+        var x = column switch
+        {
+            0 => at.X - window.Left,
+            1 => at.X - (window.Left + (window.Width - painted.Width) / 2),
+            _ => window.Right - painted.Width - at.X,
+        };
+        var y = row switch
+        {
+            0 => at.Y - window.Top,
+            1 => at.Y - (window.Top + (window.Height - painted.Height) / 2),
+            _ => window.Bottom - painted.Height - at.Y,
+        };
+        return (this with { Anchor = (OverlayAnchor)(row * 3 + column), OffsetX = x, OffsetY = y }).Clamped();
+    }
+
+    private static int Third(int position, int extent) =>
+        extent <= 0 ? 1 : Math.Clamp(position * 3 / extent, 0, 2);
+
+    /// <summary>
     /// The same placement with every number inside its bounds. A hand-edited
     /// settings file is the only way out of them, and the answer to that is
     /// the nearest sane value rather than a window drawn off-screen.

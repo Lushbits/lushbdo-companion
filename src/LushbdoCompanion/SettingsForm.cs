@@ -90,7 +90,8 @@ public sealed class SettingsForm : Form
     private readonly RadioButton[] _anchors;
     private readonly NumericUpDown _offsetX;
     private readonly NumericUpDown _offsetY;
-    private readonly NumericUpDown _size;
+    private readonly TrackBar _size;     // tenths of a percent
+    private readonly Label _sizeValue;
     private readonly Label _previewNote;
 
     // Diagnostics
@@ -216,7 +217,7 @@ public sealed class SettingsForm : Form
         var showNote = Note(
             "The session's value and pace, as the site reports them, in a click-through window of our own — only " +
             "while a session is live and the game is in front. While this page is open it draws sample figures " +
-            "instead, so each change below shows on the game as you make it.",
+            "instead: drag them on the game, or set the numbers below.",
             0, 24, 480, 52);
 
         // Nine cells, drawn as toggle buttons: the pressed one is the anchor.
@@ -256,11 +257,22 @@ public sealed class SettingsForm : Form
         _offsetY.ValueChanged += (_, _) => { if (!_loading) Apply(p => p with { OffsetY = (int)_offsetY.Value }); };
         var offsetNote = Note("Pixels in from the anchored edge; right and down from the centre.", 260, 184, 220, 40);
 
+        // A slider, not a spinner (owner ask): the size is the one number
+        // here that is felt rather than known, and the figures on the game
+        // follow the thumb as it moves. Tenths of a percent.
         var sizeLabel = new Label { Text = "Size", Left = 0, Top = 224, Width = 70 };
-        _size = Spinner(72, 220, (decimal)OverlayPlacement.MinTextPct, (decimal)OverlayPlacement.MaxTextPct, 1);
-        _size.Increment = 0.1m;
-        _size.ValueChanged += (_, _) => { if (!_loading) Apply(p => p with { TextPct = (double)_size.Value }); };
-        var sizeNote = new Label { Text = "% of the game window's height", Left = 144, Top = 224, Width = 300 };
+        _size = new TrackBar
+        {
+            Left = 72, Top = 216, Width = 290, Height = 32, AutoSize = false,
+            Minimum = (int)(OverlayPlacement.MinTextPct * 10), Maximum = (int)(OverlayPlacement.MaxTextPct * 10),
+            TickFrequency = 5, SmallChange = 1, LargeChange = 5,
+        };
+        _sizeValue = new Label { Left = 366, Top = 224, Width = 114 };
+        _size.ValueChanged += (_, _) =>
+        {
+            _sizeValue.Text = $"{_size.Value / 10.0:0.0} % of height";
+            if (!_loading) Apply(p => p with { TextPct = _size.Value / 10.0 });
+        };
 
         var reset = new Button { Text = "Back to the default spot", Left = 72, Top = 260, Width = 170 };
         reset.Click += (_, _) =>
@@ -273,7 +285,7 @@ public sealed class SettingsForm : Form
 
         var overlay = NewPage(Page.Overlay);
         overlay.Controls.AddRange([_show, showNote, anchorLabel, anchorNote, offsetLabel, xLabel, _offsetX, yLabel, _offsetY,
-            offsetNote, sizeLabel, _size, sizeNote, reset, _previewNote]);
+            offsetNote, sizeLabel, _size, _sizeValue, reset, _previewNote]);
         overlay.Controls.AddRange(_anchors);
 
         // --- Diagnostics -----------------------------------------------------
@@ -318,6 +330,9 @@ public sealed class SettingsForm : Form
 
     /// <summary>Bring the window to a page — what the tray does when the window is already up.</summary>
     public void Open(Page page) => _pages.SelectedItem = page;
+
+    /// <summary>The figures were dragged on the game: show where they ended up, without putting it back.</summary>
+    public void ShowPlacement(OverlayPlacement placement) => LoadPlacement(placement);
 
     private Panel NewPage(Page page)
     {
@@ -388,7 +403,7 @@ public sealed class SettingsForm : Form
             ? $"Black Desert's window was not found, so there is nothing to draw over yet. Start the game and the " +
               $"sample figures ({OverlayForm.SampleValue} and {OverlayForm.SamplePace}) appear by themselves."
             : $"Sample figures — {OverlayForm.SampleValue} and {OverlayForm.SamplePace} — are on the game now. " +
-              "Nothing here needs a session.";
+              "Drag them to where you want them; the anchor and offset follow. Nothing here needs a session.";
         _host.PreviewOverlay(true);
     }
 
@@ -424,7 +439,8 @@ public sealed class SettingsForm : Form
             foreach (var cell in _anchors) cell.Checked = (OverlayAnchor)cell.Tag! == placement.Anchor;
             _offsetX.Value = placement.OffsetX;
             _offsetY.Value = placement.OffsetY;
-            _size.Value = (decimal)placement.TextPct;
+            _size.Value = Math.Clamp((int)Math.Round(placement.TextPct * 10), _size.Minimum, _size.Maximum);
+            _sizeValue.Text = $"{_size.Value / 10.0:0.0} % of height";
         }
         finally
         {
