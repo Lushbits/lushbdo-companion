@@ -25,7 +25,10 @@ same ToS class as streaming software. No feature is worth bending them.
   always change — each frame is text-keyed (bright core with dark outline
   within reach, the game's own text contract), and keying is the cheap work
   the app does on every frame so it can skip the expensive work: it answers
-  "did the text change", and a frame whose text did not change is never read.
+  "did the text change", and a frame whose text did not change is not read
+  again — except that a chat with lines still awaiting consensus gets up to
+  three real second-opinion reads a second apart, because playing the last
+  reading back as agreement let one misread send itself (2026-09-08).
   Reading is not cheap — a PaddleOCR pass over the region costs ~340 ms wall,
   about 0.74 core-seconds, against Windows.Media.Ocr's 60 ms — so the gate is
   what carries the budget. A measured wolf-grind session ran OCR on a fifth of

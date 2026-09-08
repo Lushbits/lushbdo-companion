@@ -77,17 +77,6 @@ public class LineBoardTests
     }
 
     [Fact]
-    public void ReconfirmSettlesALineWithoutASecondOcrPass()
-    {
-        Pass((Weeds, 100)); // baseline anchor
-        Pass((Weeds, 82), (RoughStone, 100));
-        _board.Reconfirm(); // stabilized image unchanged → the reading holds
-        Assert.Equal([("Rough Stone", 1, RoughStone)], _emitted);
-        _board.Reconfirm();
-        Assert.Single(_emitted);
-    }
-
-    [Fact]
     public void MisreadsLoseTheVoteToTheRecurringTruth()
     {
         Pass((Weeds, 100)); // baseline anchor

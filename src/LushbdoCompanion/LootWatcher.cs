@@ -62,6 +62,21 @@ public sealed class LootWatcher : IDisposable
     /// <summary>Sampled mean-abs-diff below this and the keyed text counts as unchanged.</summary>
     private const double KeyedChangeGate = 1.5;
 
+    /// <summary>
+    /// While lines await consensus on a still chat, a real re-read every
+    /// this many ticks, at most <see cref="StillRereadCap"/> per still
+    /// stretch. The gate used to hand the board its previous readings again
+    /// instead ("reconfirm"), and that made one frame's word two: a row read
+    /// once as `Ancient Spirfit Dust` at 00:24:26.0 met the two-read
+    /// consensus with itself a tenth of a second later and was sent (field
+    /// trace, 2026-09-08). A second opinion has to be a second read. On this
+    /// recognizer a still row keys differently on about a fifth of re-reads
+    /// (2026-08-30 trace), so re-reads are real samples, and three of them a
+    /// second apart cost a burst one extra pass's worth of work.
+    /// </summary>
+    private const int StillRereadEvery = 2;
+    private const int StillRereadCap = 3;
+
     /// <summary>This many frameless ticks (~5 s) means the game window is gone, not merely idle.</summary>
     private const int FrameGapTicks = 10;
 
@@ -87,6 +102,8 @@ public sealed class LootWatcher : IDisposable
     private int _frameHeight;
     private byte[] _keyed = [];        // this frame's keyed text — the change gate
     private byte[] _lastKeyed = [];    // the previous OCR pass's keyed text
+    private int _stillTicks;           // ticks since the keyed text last changed
+    private int _stillRereads;         // second opinions taken on this still stretch
     private byte[] _raw = [];          // this frame's pixels as captured — the source reuses its own buffer
     private StreamWriter? _trace;      // opt-in diagnostics; null costs nothing
     private readonly object _traceLock = new();
@@ -370,18 +387,28 @@ public sealed class LootWatcher : IDisposable
             if (_lastKeyed.Length == length &&
                 FrameStabilizer.MeanAbsDiff(_keyed, _lastKeyed, length) < KeyedChangeGate)
             {
-                // The keyed text did not change; the last readings hold for
-                // another tick. This settles a line while the scene is still
-                // — and keeps an idle chat nearly free, whatever the world
-                // behind it is doing.
-                if (_trace is not null) Trace("gate  keyed text unchanged — reconfirming previous readings");
-                _board.Reconfirm();
-                return;
+                // The keyed text did not change. An idle chat costs nothing
+                // here, whatever the world behind it is doing; a chat with
+                // lines still awaiting consensus gets a real second read,
+                // a few times and no more — never its own last reading
+                // played back as agreement.
+                _stillTicks++;
+                if (!_board.HasUnsettled || _stillRereads >= StillRereadCap || _stillTicks % StillRereadEvery != 0)
+                {
+                    if (_trace is not null) Trace("gate  keyed text unchanged");
+                    return;
+                }
+                _stillRereads++;
+                if (_trace is not null) Trace($"gate  keyed text unchanged, lines unsettled — re-reading for a second opinion ({_stillRereads}/{StillRereadCap})");
             }
-
-            if (_lastKeyed.Length != length) _lastKeyed = new byte[length];
-            _keyed.AsSpan(0, length).CopyTo(_lastKeyed);
-            MaybeDumpFrames(frame);
+            else
+            {
+                if (_lastKeyed.Length != length) _lastKeyed = new byte[length];
+                _keyed.AsSpan(0, length).CopyTo(_lastKeyed);
+                _stillTicks = 0;
+                _stillRereads = 0;
+                MaybeDumpFrames(frame);
+            }
 
             // The source reuses its pixel buffer between frames, so the raw
             // copy has to be taken before the read goes asynchronous.

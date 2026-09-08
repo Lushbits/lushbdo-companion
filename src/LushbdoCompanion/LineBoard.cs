@@ -98,7 +98,7 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     }
 
     private readonly List<Tracker> _trackers = [];
-    private readonly List<OcrLineInput> _lastLines = [];
+    private readonly List<OcrLineInput> _sorted = [];
     private bool _baselinePending = true;
     private int _nullPasses;
     private int _backwardsPasses;
@@ -121,29 +121,24 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     public bool HasUnsettled => _trackers.Exists(t => !t.Emitted);
 
     /// <summary>
-    /// The stabilized image did not change since the last OCR pass, so the
-    /// previous readings hold for another tick — feed them back in. This is
-    /// what lets a line settle while the scene is perfectly still, without
-    /// paying for another OCR pass.
+    /// One OCR pass. Every pass here is a real read: the watcher used to
+    /// hand the previous pass back in while the keyed frame stood still, and
+    /// that let a single misread agree with itself (field trace, 2026-09-08
+    /// 00:24:26 — `Ancient Spirfit Dust`, read once, sent). A still chat now
+    /// gets re-read instead.
     /// </summary>
-    public void Reconfirm()
-    {
-        if (_baselinePending || _lastLines.Count == 0 || !HasUnsettled) return;
-        IngestCore(_lastLines, fresh: false);
-    }
-
     public void Ingest(IReadOnlyList<OcrLineInput> lines)
     {
-        _lastLines.Clear();
-        _lastLines.AddRange(lines);
-        _lastLines.Sort((a, b) => a.Y.CompareTo(b.Y));
-        IngestCore(_lastLines, fresh: true);
+        _sorted.Clear();
+        _sorted.AddRange(lines);
+        _sorted.Sort((a, b) => a.Y.CompareTo(b.Y));
+        IngestCore(_sorted);
     }
 
     /// <summary>The screen is no longer the screen we knew (resize, restart). Everything visible next is old.</summary>
     public void Reset(string reason) => ResetForRealign(reason);
 
-    private void IngestCore(List<OcrLineInput> lines, bool fresh)
+    private void IngestCore(List<OcrLineInput> lines)
     {
         if (lines.Count > 0)
             _rowPitch = Math.Clamp(MedianRowPitch(lines), 8, 64);
@@ -197,14 +192,14 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
                     // burst moves on. Then everything "revealed" below is
                     // old lines we already counted, indistinguishable from
                     // new ones — realign rather than repeat.
-                    trace?.Invoke($"vote  full {voted:F1}, unique {unique:F1} — backwards strike {_backwardsPasses + (fresh ? 1 : 0)}");
-                    if (fresh && ++_backwardsPasses >= BackwardsPassesBeforeReset)
+                    trace?.Invoke($"vote  full {voted:F1}, unique {unique:F1} — backwards strike {_backwardsPasses + 1}");
+                    if (++_backwardsPasses >= BackwardsPassesBeforeReset)
                         ResetForRealign("the chat scrolled backwards");
                     return;
                 }
                 dy = unique; // the duplicates lied; the unique lines pin the true shift
             }
-            if (fresh) _backwardsPasses = 0;
+            _backwardsPasses = 0;
             _blindSpell = false;
             trace?.Invoke($"vote  dy {dy:F1} (full {voted:F1}{(uniqueVote is { } uv ? $", unique {uv:F1}" : "")}), {_trackers.Count} tracker(s)");
         }
@@ -620,7 +615,6 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
             // storm of mangled frames, a cleared tab). What is visible when
             // reading resumes may be lines we already counted: baseline again.
             _baselinePending = true;
-            _lastLines.Clear();
         }
     }
 
@@ -780,7 +774,6 @@ public sealed class LineBoard(Action<string, int, string> emit, Action<string> n
     {
         var unconfirmed = _trackers.Count(t => !t.Emitted);
         _trackers.Clear();
-        _lastLines.Clear();
         _baselinePending = true;
         _nullPasses = 0;
         _backwardsPasses = 0;
