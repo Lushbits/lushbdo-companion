@@ -14,6 +14,12 @@ namespace LushbdoCompanion;
 /// control changes what is on the game as it is changed and nothing is
 /// mocked in here. That costs one repaint on the way in and one on the way
 /// out, and nothing while the window is closed.
+///
+/// Modeless, on purpose: the log is the app's debugging surface and stays
+/// readable with this open, and the tray keeps working. Every control here
+/// applies as it is changed, the way the tray's switches always have; the
+/// one exception is the pairing, where a half-pasted token must not save on
+/// every keystroke, so that page keeps a Save button.
 /// </summary>
 public sealed class SettingsForm : Form
 {
@@ -201,6 +207,9 @@ public sealed class SettingsForm : Form
         _loading = false;
         _pages.SelectedItem = open;
     }
+
+    /// <summary>Bring the window to a page — what the tray does when the window is already up.</summary>
+    public void Open(Page page) => _pages.SelectedItem = page;
 
     private Panel NewPage(Page page)
     {

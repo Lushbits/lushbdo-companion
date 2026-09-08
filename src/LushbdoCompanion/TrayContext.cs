@@ -28,6 +28,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     private LootSender? _sender;
     private SilverSender? _silver;
     private OverlayForm? _overlay;
+    private SettingsForm? _settingsWindow;
     private bool _previewing; // the settings window's Overlay page is open, and the overlay is its preview
     private bool _updateBalloonShown;
 
@@ -628,10 +629,23 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
     }
 
+    /// <summary>
+    /// One settings window, modeless: the log stays readable and the tray
+    /// stays usable while it is open, and opening it again brings the one
+    /// that is up to the page asked for. It disposes itself on close.
+    /// </summary>
     private void ShowSettings(SettingsForm.Page page = SettingsForm.Page.Pairing)
     {
-        using var form = new SettingsForm(_settings, this, page);
-        form.ShowDialog();
+        if (_settingsWindow is { IsDisposed: false } open)
+        {
+            open.Open(page);
+            open.Activate();
+            return;
+        }
+        var form = new SettingsForm(_settings, this, page);
+        form.FormClosed += (_, _) => _settingsWindow = null;
+        _settingsWindow = form;
+        form.Show();
     }
 
     private async Task SendTestBatchAsync()
@@ -698,7 +712,9 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
 
     private void Quit()
     {
+        _settingsWindow?.Close(); // ends a preview, which is what would otherwise reach for the overlay below
         _overlay?.Dispose();
+        _overlay = null;
         _watcher?.Dispose();
         _sender?.Dispose();
         _silver?.Dispose();
