@@ -185,6 +185,41 @@ On Windows 11 the app asks the OS to skip the yellow "this window is being
 captured" border and usually may. On Windows 10 that API does not exist: the
 border around the game window is unavoidable there, same as with OBS.
 
+### Session overlay
+
+Two figures over the game while a session runs: what the session is worth so
+far and its pace in silver per hour, as the site reports them on each reply —
+the net figures, what you would bank. On a site from before it priced runs, or
+a sheet nothing could be priced on, the item count and the gathering clock show
+instead. Nothing else is on it, and it shows only while the site says a session
+is live and the game is the window in front.
+
+It is a separate click-through window of the app's own, laid over the game
+window's rectangle — the same thing as dragging a browser over the game.
+Nothing is injected, nothing is hooked, and window capture never includes it,
+so it is neither in the frames the app reads nor in an OBS window capture of
+the game.
+
+Off by default. Right-click the tray icon → **Session overlay…** opens the
+settings window's Overlay page, where it is switched on and placed:
+
+- **Anchor** — one of nine spots: the corners, the middle of each edge, or the
+  centre of the game window. Anchoring is what survives a resolution or
+  window-size change.
+- **Offset** — pixels in from the anchored edge, or right and down from the
+  centre. Negative pushes the other way.
+- **Size** — text height as a percentage of the game window's height, two
+  percent by default, so it scales with the window.
+
+While that page is open the overlay itself is the preview: it draws sample
+figures (`12,345,678` and `45.6M/h`) over the game whether or not a session is
+running, so every control changes what you see on the game as you change it.
+Start the game first — with no game window there is nothing to draw over.
+
+If you placed the overlay with an earlier build's rectangle picker, the app
+converts that once at startup into the same spot as an anchor and an offset,
+and says so in the log.
+
 ### Built to sit beside a running game
 
 - Capture is the same compositor path OBS uses — window capture, its least

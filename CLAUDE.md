@@ -18,10 +18,18 @@ same ToS class as streaming software. No feature is worth bending them.
   to resolve on the site. The app does not correct, fuzzy-match or drop lines.
 - **The site is the product.** Sessions start/stop on the site; the register
   and held lines live there. The app's only UI beyond pairing is its live log,
-  (milestone b) the region picker, and (#39) a two-line session overlay that
+  (milestone b) the region picker, (#39) a two-line session overlay that
   draws only what the site reports back on an ingest reply — value and pace
   once bdo#724 ships, the item count and clock until then — as a separate
-  click-through window over the game's rectangle, never anything injected.
+  click-through window over the game's rectangle, never anything injected,
+  and (#43) one settings window with pages down the left, which holds the
+  settings the tray already had and the overlay's placement: an anchor, an
+  offset in from it, and a text size as a share of the game window's height
+  (`OverlayPlacement`, resolved against the window's bounds on every follow,
+  which is what survives a resolution change). The overlay itself is that
+  page's preview — while the page is open the real window draws sample
+  figures over the game, one repaint in and one out — so nothing is mocked in
+  the dialog and the preview costs nothing while the window is closed.
 - **Featherweight beside the game.** Gamers notice; no feature is worth frame
   drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
   background is transparent by design (owner decision, #2), so raw pixels

@@ -7,7 +7,7 @@ namespace LushbdoCompanion;
 /// There is deliberately no main window — the site is the product, this is the
 /// typing you no longer do.
 /// </summary>
-public sealed class TrayContext : ApplicationContext
+public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
 {
     private readonly NotifyIcon _icon;
     private readonly Icon? _appIcon;
@@ -19,17 +19,16 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _traceItem;
     private readonly ToolStripMenuItem _silverOnlyItem;
 
-    // All three rectangles live in one submenu and each says what it is set
-    // to, because "which of these did I actually pick, and where?" was a
-    // question the menu could not answer and the log could only answer at
-    // startup.
+    // Both rectangles live in one submenu and each says what it is set to,
+    // because "which of these did I actually pick, and where?" was a question
+    // the menu could not answer and the log could only answer at startup.
     private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _regionItems = [];
     private readonly Dictionary<Settings.RegionKind, ToolStripMenuItem> _forgetItems = [];
     private LootWatcher? _watcher;
     private LootSender? _sender;
     private SilverSender? _silver;
     private OverlayForm? _overlay;
-    private readonly ToolStripMenuItem _overlayItem;
+    private bool _previewing; // the settings window's Overlay page is open, and the overlay is its preview
     private bool _updateBalloonShown;
 
     public TrayContext()
@@ -80,31 +79,14 @@ public sealed class TrayContext : ApplicationContext
                           "costs CPU — it keys every frame and reads the chat — so this is far lighter on a laptop.",
         };
 
-        // Two figures over the game while a session runs (#39): value so far
-        // and silver per hour, as the site reports them on each reply. A
-        // separate click-through window over the game's rectangle — nothing
-        // is injected or hooked, which is the only way this app draws.
-        _overlayItem = new ToolStripMenuItem("Show on the game window", null, (_, _) => ToggleOverlay())
-        {
-            Checked = _settings.ShowOverlay,
-            ToolTipText = "Draw the running session's value and silver/hour over the game, in a click-through " +
-                          "window of our own. Shows only while a session is live and the game is in front.",
-        };
-        var overlay = new ToolStripMenuItem("Session overlay");
-        overlay.DropDownItems.Add(_overlayItem);
-        overlay.DropDownItems.Add(new ToolStripMenuItem("Place it…", null,
-            async (_, _) => await PickRegionAsync(Settings.RegionKind.Overlay))
-        {
-            ToolTipText = "Drag a rectangle where the figures should sit. Its height sets the text size.",
-        });
-        overlay.DropDownItems.Add(new ToolStripMenuItem("Back to the default spot", null,
-            async (_, _) => await ForgetRegionAsync(Settings.RegionKind.Overlay)));
-
+        // The session overlay (#39) — two figures over the game while a session
+        // runs — is switched on and placed in the settings window (#43), where
+        // the overlay itself is the preview; the tray only opens that page.
         var menu = new ContextMenuStrip { ShowItemToolTips = true };
         menu.Items.Add("Open log", null, (_, _) => ShowLog());
         menu.Items.Add(regions);
         menu.Items.Add(_silverOnlyItem);
-        menu.Items.Add(overlay);
+        menu.Items.Add("Session overlay…", null, (_, _) => ShowSettings(SettingsForm.Page.Overlay));
         menu.Items.Add(_watchItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open lushbdo.com", null, (_, _) => OpenSite());
@@ -138,6 +120,23 @@ public sealed class TrayContext : ApplicationContext
                         "the setting that does that properly is \"Watch silver only\", which skips the loot log " +
                         "instead of reading it badly.");
         LogRegions();
+
+        // A rectangle placement from before #43 is said again as an anchor and
+        // an offset, at the size it drew. That size becomes a share of the
+        // window's height, so the conversion wants the game window — or, with
+        // the game not up, the monitor a borderless client fills.
+        if (_settings.OverlayRegion is not null)
+        {
+            var height = GameWindow.Find()?.Bounds.Height ?? Screen.PrimaryScreen?.Bounds.Height ?? 1080;
+            if (_settings.MigrateOverlayRegion(height))
+            {
+                _settings.Save();
+                var o = _settings.Overlay;
+                _log.Append($"Session overlay: the rectangle it was placed with is now an anchor ({o.Anchor}), an offset " +
+                            $"({o.OffsetX}, {o.OffsetY}) and a text size ({o.TextPct:0.0} % of the window's height) — " +
+                            "the same spot, and it now survives a resolution change. Settings → Overlay shows it live.");
+            }
+        }
 
         if (!_settings.IsPaired) ShowSettings();
 
@@ -216,13 +215,12 @@ public sealed class TrayContext : ApplicationContext
 
     /// <summary>
     /// What each rectangle is called, in the log, the menu and the picker. The
-    /// loot log is the one the app cannot work without; the two balance
-    /// rectangles are independently optional.
+    /// loot log is the one the app cannot work without; the balance rectangle
+    /// is optional.
     /// </summary>
     private static string RegionName(Settings.RegionKind kind) => kind switch
     {
         Settings.RegionKind.Loot => "Loot log",
-        Settings.RegionKind.Overlay => "Session overlay",
         _ => "Marketplace silver",
     };
 
@@ -237,9 +235,6 @@ public sealed class TrayContext : ApplicationContext
     {
         Settings.RegionKind.Loot =>
             "This is a frozen frame of the game window — drag a rectangle around its loot chat tab. Esc cancels.",
-        Settings.RegionKind.Overlay =>
-            "This is a frozen frame of the game window — drag a rectangle where the session figures should sit, " +
-            "clear of the game's own UI. Two lines of text fill its height. Esc cancels.",
         _ =>
             "Open the Central Market in-game first. This is a frozen frame of the game window — drag a rectangle " +
             "around its Warehouse Balance figure, and keep any buttons out of it. If the market is not in this " +
@@ -249,7 +244,6 @@ public sealed class TrayContext : ApplicationContext
     private static string LivePickerHint(Settings.RegionKind kind) => kind switch
     {
         Settings.RegionKind.Loot => "Drag a rectangle around the game's loot chat tab — Esc cancels",
-        Settings.RegionKind.Overlay => "Drag a rectangle where the session figures should sit — Esc cancels",
         _ => "With the Central Market open, drag a rectangle around its silver figure — Esc cancels",
     };
 
@@ -287,7 +281,7 @@ public sealed class TrayContext : ApplicationContext
                 {
                     region = picker.Selection;
                 }
-                else if (kind is Settings.RegionKind.Loot or Settings.RegionKind.Overlay || !AskToPickLive(kind))
+                else if (kind is Settings.RegionKind.Loot || !AskToPickLive(kind))
                 {
                     _log.Append($"{RegionName(kind)} region pick cancelled.");
                     return;
@@ -339,14 +333,6 @@ public sealed class TrayContext : ApplicationContext
         _settings.Save();
         RefreshRegionMenu();
         _log.Append($"Region · {RegionName(kind)} set: {region.Value.Width}×{region.Value.Height} at ({region.Value.X}, {region.Value.Y}) in the game window.");
-        if (kind == Settings.RegionKind.Overlay)
-        {
-            // Nothing is read there: the overlay is drawn, and only while
-            // watching. Placing it is not the intent to start.
-            _overlay?.Place(region);
-            if (wasWatching) await StartWatchingAsync();
-            return;
-        }
         if (!_watchItem.Enabled)
         {
             // Owner ruling (#22, 2026-08-30): watching is all or nothing.
@@ -360,7 +346,7 @@ public sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// Drop one rectangle, any of the three. Per-region rather than
+    /// Drop one rectangle, either of the two. Per-region rather than
     /// all-or-nothing because a badly aimed one spends passes on scenery every
     /// time it goes still, and the answer to that should not be re-picking the
     /// one that works.
@@ -379,14 +365,6 @@ public sealed class TrayContext : ApplicationContext
     /// </summary>
     private async Task ForgetRegionAsync(Settings.RegionKind kind)
     {
-        if (kind == Settings.RegionKind.Overlay)
-        {
-            _settings.ForgetRegion(kind);
-            _settings.Save();
-            _overlay?.Place(null);
-            _log.Append("Session overlay back at its default spot — top centre of the game window.");
-            return;
-        }
         if (_settings.RegionFor(kind) is null)
         {
             _log.Append($"{RegionName(kind)} is not set.");
@@ -551,24 +529,34 @@ public sealed class TrayContext : ApplicationContext
     /// <summary>
     /// The overlay exists exactly while there is a sender to feed it: it shows
     /// what the site reports back, so without a paired sender it has nothing
-    /// honest to draw, and without watching it has nothing at all.
+    /// honest to draw, and without watching it has nothing at all. The one
+    /// other time it exists is as the settings window's preview (#43), which
+    /// needs the real window to draw sample figures over the game with.
     /// </summary>
     private void SyncOverlay()
     {
-        if (_settings.ShowOverlay && _sender is not null)
+        if (_previewing || (_settings.ShowOverlay && _sender is not null))
         {
-            _overlay ??= new OverlayForm(_settings.RegionFor(Settings.RegionKind.Overlay));
+            _overlay ??= new OverlayForm(_settings.Overlay);
             return;
         }
         _overlay?.Dispose();
         _overlay = null;
     }
 
-    private void ToggleOverlay()
+    // --- What the settings window asks of the tray ------------------------
+
+    public void PreviewOverlay(bool on)
     {
-        _settings.ShowOverlay = !_settings.ShowOverlay;
-        _settings.Save();
-        _overlayItem.Checked = _settings.ShowOverlay;
+        _previewing = on;
+        SyncOverlay();           // brings the window up for a preview, or takes it down after one
+        _overlay?.Preview(on);   // and the one that stays goes back to the live figures
+    }
+
+    public void OverlayPlaced() => _overlay?.Place(_settings.Overlay);
+
+    public void OverlayToggled()
+    {
         SyncOverlay();
         if (!_settings.ShowOverlay)
         {
@@ -582,16 +570,21 @@ public sealed class TrayContext : ApplicationContext
                 : "Session overlay on — it appears once watching starts and the site reports a running session.");
     }
 
+    public void PairingSaved() =>
+        _log.Append(_settings.IsPaired ? $"Settings saved. Site: {_settings.BaseUrl}" : "Settings saved — still no token.");
+
     private void StopWatching(string message)
     {
-        _overlay?.Dispose();
-        _overlay = null;
         _watcher?.Dispose();
         _watcher = null;
         _sender?.Dispose();
         _sender = null;
         _silver?.Dispose();
         _silver = null;
+        // No sender, no session: the overlay goes, unless it is mid-preview,
+        // in which case it stays and just has no live figures to come back to.
+        _overlay?.Report(null);
+        SyncOverlay();
         _watchItem.Text = "Start watching";
         _log.Append(message);
     }
@@ -635,11 +628,10 @@ public sealed class TrayContext : ApplicationContext
         else _log.Append(_settings.TraceOcr ? "OCR trace will start with the next watch." : "OCR trace off.");
     }
 
-    private void ShowSettings()
+    private void ShowSettings(SettingsForm.Page page = SettingsForm.Page.Pairing)
     {
-        using var form = new SettingsForm(_settings);
-        if (form.ShowDialog() == DialogResult.OK)
-            _log.Append(_settings.IsPaired ? $"Settings saved. Site: {_settings.BaseUrl}" : "Settings saved — still no token.");
+        using var form = new SettingsForm(_settings, this, page);
+        form.ShowDialog();
     }
 
     private async Task SendTestBatchAsync()

@@ -28,6 +28,13 @@ namespace LushbdoCompanion;
 /// session, a pause, the game not in front, the game gone — and repainted
 /// only when a figure changes. Following the window is a position query
 /// four times a second and nothing more.
+///
+/// Where it sits is an <see cref="OverlayPlacement"/> (#43) — anchor, offset
+/// and a text size that is a share of the game window's height — resolved
+/// against the window's bounds on every follow, so the same setting holds
+/// across a resolution change or a resized client. While the settings
+/// window's Overlay page is open the same window draws sample figures
+/// instead (<see cref="Preview"/>), so the page needs no mock of its own.
 /// </summary>
 public sealed class OverlayForm : Form
 {
@@ -37,10 +44,9 @@ public sealed class OverlayForm : Form
     private const int WsExNoActivate = 0x08000000;
     private const int WsExTopmost = 0x00000008;
 
-    private const float DefaultTextPx = 22;
-    private const float MinTextPx = 12;
-    private const float MaxTextPx = 56;
-    private const int DefaultTopMargin = 6;
+    /// <summary>The figures the settings page previews with. Fixed: an editable sample is a control nobody uses twice.</summary>
+    public const string SampleValue = "12,345,678";
+    public const string SamplePace = "45.6M/h";
 
     /// <summary>
     /// The site's pace is the value over the gathering time, whatever that
@@ -58,11 +64,13 @@ public sealed class OverlayForm : Form
     private readonly PrivateFontCollection? _fonts;
     private readonly IntPtr _fontMemory;
     private Font _font;
+    private float _fontPx;
 
-    private Rectangle? _anchor;          // window-relative: where the member put it, or null for the default spot
+    private OverlayPlacement _placement;
     private string _line1 = "";
     private string _line2 = "";
     private bool _live;                  // the site last reported a running session
+    private bool _preview;               // the settings page is open: sample figures, game in front or not
     private bool _dirty = true;          // a figure changed since the last paint
     private bool _shown;
     private Size _painted;
@@ -70,7 +78,7 @@ public sealed class OverlayForm : Form
     private IntPtr _game;
     private DateTime _nextFind = DateTime.MinValue;
 
-    public OverlayForm(Rectangle? anchor)
+    public OverlayForm(OverlayPlacement placement)
     {
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -79,8 +87,11 @@ public sealed class OverlayForm : Form
         Text = "LushBDO Companion overlay";
 
         (_fonts, _fontMemory) = LoadTypeface();
-        _font = MakeFont(DefaultTextPx);
-        Place(anchor);
+        _placement = placement;
+        // Sized for nothing yet: the first follow that sees the game window
+        // remakes this at the size the placement says for that window.
+        _fontPx = 0;
+        _font = MakeFont(1);
 
         _ = Handle; // the layered window exists before the first figure arrives
         _follow = new System.Windows.Forms.Timer { Interval = (int)FollowPace.TotalMilliseconds };
@@ -101,18 +112,27 @@ public sealed class OverlayForm : Form
     }
 
     /// <summary>
-    /// Where to draw, in game-window pixels. The rectangle's top-left is the
-    /// spot and its height sets the text size — two lines fill it. Null is
-    /// the default: top centre of the game window, where nothing of the
-    /// game's own UI sits at rest.
+    /// Where to draw. Takes effect on the spot: a moved anchor or offset is one
+    /// window move, a changed size is one repaint — the settings page calls
+    /// this on every control change and that is all each change costs.
     /// </summary>
-    public void Place(Rectangle? anchor)
+    public void Place(OverlayPlacement placement)
     {
-        _anchor = anchor;
-        var px = anchor is { } a ? Math.Clamp(a.Height * 0.38f, MinTextPx, MaxTextPx) : DefaultTextPx;
-        var font = MakeFont(px);
-        _font.Dispose();
-        _font = font;
+        _placement = placement;
+        Follow();
+    }
+
+    /// <summary>
+    /// The settings page's live preview: draw the sample figures over the
+    /// game whether or not a session is live and whether or not the game is
+    /// in front — the settings window is what is in front then. One repaint
+    /// on the way in and one on the way out; the live figures come back
+    /// exactly as they were.
+    /// </summary>
+    public void Preview(bool on)
+    {
+        if (on == _preview) return;
+        _preview = on;
         _dirty = true;
         Follow();
     }
@@ -143,13 +163,15 @@ public sealed class OverlayForm : Form
         _live = live;
         _line1 = line1;
         _line2 = line2;
-        _dirty = true;
+        // The samples are what is on screen during a preview; the new figures
+        // are painted when it ends.
+        if (!_preview) _dirty = true;
         Follow();
     }
 
     private void Follow()
     {
-        if (IsDisposed || !_live)
+        if (IsDisposed || !(_live || _preview))
         {
             Conceal();
             return;
@@ -177,8 +199,10 @@ public sealed class OverlayForm : Form
         }
 
         // Only over the game while the game is in front: a member who tabbed
-        // out to the site does not want session figures on top of it.
-        if (GetForegroundWindow() != _game)
+        // out to the site does not want session figures on top of it. The
+        // preview is the exception, since the settings window is in front
+        // precisely while the member is placing this one.
+        if (!_preview && GetForegroundWindow() != _game)
         {
             Conceal();
             return;
@@ -190,10 +214,21 @@ public sealed class OverlayForm : Form
             return;
         }
 
+        // The text size is a share of the window's height, so a resized
+        // client or a changed setting is a new font; a window that only moved
+        // is not.
+        var px = _placement.TextPx(bounds.Size);
+        if (px != _fontPx)
+        {
+            var font = MakeFont(px);
+            _font.Dispose();
+            _font = font;
+            _fontPx = px;
+            _dirty = true;
+        }
+
         if (_dirty) Render();
-        var at = _anchor is { } a
-            ? new Point(bounds.X + a.X, bounds.Y + a.Y)
-            : new Point(bounds.X + (bounds.Width - _painted.Width) / 2, bounds.Y + DefaultTopMargin);
+        var at = _placement.Resolve(bounds, _painted);
         if (at != _shownAt)
         {
             SetWindowPos(Handle, HwndTopmost, at.X, at.Y, 0, 0, SwpNoSize | SwpNoActivate);
@@ -222,7 +257,7 @@ public sealed class OverlayForm : Form
     private void Render()
     {
         _dirty = false;
-        var lines = new[] { _line1, _line2 };
+        var lines = _preview ? new[] { SampleValue, SamplePace } : new[] { _line1, _line2 };
         var outline = Math.Max(2f, _font.Size / 9);
         var pad = outline + 2;
 
