@@ -66,42 +66,63 @@ public sealed record OverlayPlacement(
     /// <summary>The pace line's, likewise.</summary>
     public float PaceTextPx(Size window) => Px(window, PaceTextPct);
 
-    private static float Px(Size window, double pct) =>
+    /// <summary>A text height that is a share of the window's height, in whole pixels and inside the readable range. The item slots (#52) size their text by the same rule.</summary>
+    public static float Px(Size window, double pct) =>
         MathF.Round(Math.Clamp((float)(window.Height * pct / 100), MinTextPx, MaxTextPx));
 
     /// <summary>Where a painted bitmap of this size goes, in screen pixels, over a game window with these bounds.</summary>
-    public Point Resolve(Rectangle window, Size painted)
+    public Point Resolve(Rectangle window, Size painted) => Resolve(Anchor, OffsetX, OffsetY, window, painted);
+
+    /// <summary>
+    /// The anchor arithmetic itself, for anything placed the way the figures
+    /// are: the item slots (#52) hang from an anchor with an offset too, and
+    /// one copy of how an offset is measured in from an edge is what keeps a
+    /// slot group and the figures agreeing about what "12 px from the right"
+    /// means.
+    /// </summary>
+    public static Point Resolve(OverlayAnchor anchor, int offsetX, int offsetY, Rectangle window, Size painted)
     {
-        var x = Column switch
+        var x = ColumnOf(anchor) switch
         {
-            0 => window.Left + OffsetX,
-            1 => window.Left + (window.Width - painted.Width) / 2 + OffsetX,
-            _ => window.Right - painted.Width - OffsetX,
+            0 => window.Left + offsetX,
+            1 => window.Left + (window.Width - painted.Width) / 2 + offsetX,
+            _ => window.Right - painted.Width - offsetX,
         };
-        var y = Row switch
+        var y = RowOf(anchor) switch
         {
-            0 => window.Top + OffsetY,
-            1 => window.Top + (window.Height - painted.Height) / 2 + OffsetY,
-            _ => window.Bottom - painted.Height - OffsetY,
+            0 => window.Top + offsetY,
+            1 => window.Top + (window.Height - painted.Height) / 2 + offsetY,
+            _ => window.Bottom - painted.Height - offsetY,
         };
         return new Point(x, y);
     }
 
     /// <summary>0 left, 1 centre, 2 right — which is also how the two lines align with each other.</summary>
-    public int Column => (int)Anchor % 3;
+    public int Column => ColumnOf(Anchor);
 
     /// <summary>0 top, 1 middle, 2 bottom.</summary>
-    public int Row => (int)Anchor / 3;
+    public int Row => RowOf(Anchor);
+
+    public static int ColumnOf(OverlayAnchor anchor) => (int)anchor % 3;
+
+    public static int RowOf(OverlayAnchor anchor) => (int)anchor / 3;
 
     /// <summary>
     /// Where a drag left the figures, said as a placement: the anchor is the
     /// cell of the window's thirds the painted bitmap's centre landed in — so
     /// figures dropped near a corner hang from that corner and survive the
     /// window changing shape — and the offset is whatever puts the bitmap
-    /// exactly there under that anchor. <see cref="Resolve"/> of the result
-    /// gives the point back; the sizes and the order are untouched.
+    /// exactly there under that anchor. <see cref="Resolve(Rectangle, Size)"/>
+    /// of the result gives the point back; the sizes and the order are untouched.
     /// </summary>
     public OverlayPlacement At(Rectangle window, Size painted, Point at)
+    {
+        var (anchor, x, y) = Snap(window, painted, at);
+        return (this with { Anchor = anchor, OffsetX = x, OffsetY = y }).Clamped();
+    }
+
+    /// <summary>The drop arithmetic behind <see cref="At"/>, shared with the slots for the same reason <see cref="Resolve(OverlayAnchor, int, int, Rectangle, Size)"/> is.</summary>
+    public static (OverlayAnchor Anchor, int OffsetX, int OffsetY) Snap(Rectangle window, Size painted, Point at)
     {
         var column = Third(at.X + painted.Width / 2 - window.Left, window.Width);
         var row = Third(at.Y + painted.Height / 2 - window.Top, window.Height);
@@ -117,7 +138,7 @@ public sealed record OverlayPlacement(
             1 => at.Y - (window.Top + (window.Height - painted.Height) / 2),
             _ => window.Bottom - painted.Height - at.Y,
         };
-        return (this with { Anchor = (OverlayAnchor)(row * 3 + column), OffsetX = x, OffsetY = y }).Clamped();
+        return ((OverlayAnchor)(row * 3 + column), x, y);
     }
 
     private static int Third(int position, int extent) =>

@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- Windows, because the sources linked below are Windows code (DPAPI
+         behind the token) and the tests only ever run here; still no WinRT
+         and no WinForms, so the project stays a plain test project. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -21,6 +24,14 @@
     <Compile Include="..\LushbdoCompanion\BalanceBoard.cs" Link="app\BalanceBoard.cs" />
     <Compile Include="..\LushbdoCompanion\LootPool.cs" Link="app\LootPool.cs" />
     <Compile Include="..\LushbdoCompanion\OverlayPlacement.cs" Link="app\OverlayPlacement.cs" />
+    <Compile Include="..\LushbdoCompanion\SlotsPlacement.cs" Link="app\SlotsPlacement.cs" />
+    <!-- The site's reply, as this app reads it: the one contract that can
+         drift under the app (the slots of bdo#728 arrived after the figures
+         did), so its parsing is pinned here. IngestClient is HttpClient and
+         records, nothing Windows; Settings comes along because the client
+         is constructed over it, and DPAPI is the package it needs. -->
+    <Compile Include="..\LushbdoCompanion\IngestClient.cs" Link="app\IngestClient.cs" />
+    <Compile Include="..\LushbdoCompanion\Settings.cs" Link="app\Settings.cs" />
     <!-- Not app code: the strip read it serves was reverted, so it lives with
          the eval harness that still measures with it. See its own summary. -->
     <Compile Include="..\LushbdoCompanion.Eval\FrameDelta.cs" Link="eval\FrameDelta.cs" />
@@ -28,6 +39,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
     <PackageReference Include="xunit" Version="2.9.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
