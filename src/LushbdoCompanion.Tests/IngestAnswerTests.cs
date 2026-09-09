@@ -33,12 +33,17 @@ public class IngestAnswerTests
     [Fact]
     public void Slots_arrive_in_order_with_nulls_holding_the_empty_ones()
     {
+        // Exactly what bdo#729 ships (`IngestSlot`): the array is always three
+        // long, an empty place is null, and each entry also says its own
+        // `slot` number — which this app does not read, since the position is
+        // the meaning and an unknown key is ignored on the way in.
         var answer = Parse("""
             {"applied":true,"reason":null,
              "session":{"id":"s1","elapsedSec":600,"liveSinceSec":600,"items":4,
+                        "valueGross":1000,"valueNet":650,"silverPerHourGross":6000,"silverPerHourNet":3900,"unvaluedRows":0,
                         "slots":[null,
-                                 {"itemId":752023,"name":"Vital Crystal","qty":12,"iconPath":"new_icon/03_etc/07_productmaterial/00000752023.webp"},
-                                 {"itemId":4001,"name":"Rough Stone","qty":0,"iconPath":null}]},
+                                 {"slot":2,"itemId":752023,"name":"Vital Crystal","qty":12,"iconPath":"new_icon/03_etc/07_productmaterial/00000752023.webp"},
+                                 {"slot":3,"itemId":4001,"name":"Rough Stone","qty":0,"iconPath":null}]},
              "matched":[],"held":[],"dropped":[]}
             """);
         var slots = answer.Session!.Slots!;
@@ -49,6 +54,22 @@ public class IngestAnswerTests
         Assert.Equal("new_icon/03_etc/07_productmaterial/00000752023.webp", slots[1]!.IconPath);
         Assert.Equal(0, slots[2]!.Qty);
         Assert.Null(slots[2]!.IconPath);
+    }
+
+    [Fact]
+    public void A_run_with_nothing_pinned_answers_three_empty_places()
+    {
+        // The site's `noSheet()` and a sheet with no slot set both send this.
+        var answer = Parse("""
+            {"applied":false,"reason":"empty",
+             "session":{"id":"s1","elapsedSec":0,"liveSinceSec":0,"items":0,
+                        "valueGross":null,"valueNet":null,"silverPerHourGross":null,"silverPerHourNet":null,"unvaluedRows":0,
+                        "slots":[null,null,null]},
+             "matched":[],"held":[],"dropped":[]}
+            """);
+        var slots = answer.Session!.Slots!;
+        Assert.Equal(3, slots.Count);
+        Assert.All(slots, Assert.Null);
     }
 
     [Fact]
