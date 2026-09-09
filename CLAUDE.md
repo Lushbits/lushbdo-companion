@@ -43,7 +43,22 @@ same ToS class as streaming software. No feature is worth bending them.
   2026-09-09): the click-through style is dropped so the figures can be
   dragged, a drop snaps the anchor to the cell it landed in and works the
   offset back, and the style is re-applied on every follow so a live overlay
-  can never be left in the way of a click on the game.
+  can never be left in the way of a click on the game. (#52) The overlay also
+  draws up to three **item slots** — the icon and running count of items the
+  member put in slots on the site (bdo#728, which carries them on the reply)
+  — as a second layered window beside the figures' (`SlotsPane`, both over
+  `LayeredPane`), so neither bitmap spans the game, under one group placement
+  of their own (`SlotsPlacement`: anchor, offset, size, spacing and
+  direction; owner ruling 2026-09-10, one anchor for the group rather than one
+  per slot). Which items is never the app's to say: the reply names them, a
+  cleared slot closes the group up, and the icons come from the site's own
+  icons route on the same token, one fetch per path, cached under
+  `%LOCALAPPDATA%` and revalidated by ETag no more than daily (`IconCache`),
+  decoded with the SkiaSharp already in the exe so no native dependency was
+  added. A slot whose icon is not in hand draws a plain square — never another
+  item's picture, never a skipped row. The Item slots settings page is the
+  slots' preview the way the Overlay page is the figures', and the
+  Diagnostics page says what the icon cache holds and can clear it.
 - **Featherweight beside the game.** Gamers notice; no feature is worth frame
   drops. Capture is sampled (not streamed) and cropped on the GPU. The chat
   background is transparent by design (owner decision, #2), so raw pixels

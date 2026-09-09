@@ -7,23 +7,28 @@ using System.Runtime.InteropServices;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// Two figures over the game window while a session runs (#39): what the
-/// session is worth so far, and its pace in silver per hour. Nothing else on
-/// it — no log, no list, no controls. One glance that saves an alt-tab.
+/// The overlay over the game window while a session runs: two figures (#39)
+/// — what the session is worth so far, and its pace in silver per hour — and
+/// (#52) up to three item slots, each the icon and running count of an item
+/// the member put in a slot on the site. Nothing else on it — no log, no
+/// list, no controls. One glance that saves an alt-tab.
 ///
-/// How it stays in the same class as everything else here: this is a
-/// separate top-most, click-through, never-activated layered window in our
-/// own process, placed over the game window's rectangle — the same thing as
-/// dragging a browser over the game. Nothing is injected, nothing is hooked,
-/// nothing touches the game's process; the game is found the way the picker
-/// finds it and followed with plain window queries. Capture is per-window,
-/// so this window never appears in the frames OCR reads.
+/// Two windows, one mind. This is the figures' own window and the one that
+/// decides everything: it finds the game, follows it, knows whether a run is
+/// live and whether the last reply is stale, and owns the slots' window
+/// (<see cref="SlotsPane"/>) as a second pane it moves and paints under the
+/// same rules. What the two windows have in common — the layered-window
+/// plumbing and the drag — is <see cref="LayeredPane"/>, written once; how
+/// the overlay stays in the same class as everything else here is argued on
+/// it. Two windows rather than one because the figures and the slots hang
+/// from anchors of their own, and one bitmap spanning both would be most of
+/// the game window repainted on every pickup.
 ///
-/// The figures are levels, like the silver balance: they are whatever the
-/// site last reported on an ingest reply, and the app posts exactly when the
-/// value changes, so nothing polls. The site values the run itself
-/// (bdo#724, shipped in bdo#725) and this draws the gross figures — the
-/// full value before the market's cut, which is what the site's own
+/// The figures and the slots are levels, like the silver balance: they are
+/// whatever the site last reported on an ingest reply, and the app posts
+/// exactly when the value changes, so nothing polls. The site values the run
+/// itself (bdo#724, shipped in bdo#725) and this draws the gross figures —
+/// the full value before the market's cut, which is what the site's own
 /// "Worth so far" shows unless a reader flips that view to after tax
 /// (owner ruling, 2026-09-09: always before tax; #42 had picked net, and
 /// the overlay and the sheet then showed two numbers for one run). On a
@@ -31,39 +36,39 @@ namespace LushbdoCompanion;
 /// count shows in the value's place; a pace that cannot be shown yet is a
 /// dash, not the clock — the clock in that spot read as strange (owner,
 /// 2026-09-09). Each line has its own size and the order is the member's.
-/// Three minutes without a reply and the figures go too (owner,
-/// 2026-09-09): the sender speaks only when there is loot to send, so a
-/// session stopped with no pickup after it would otherwise never reach this
-/// window, and stale figures would stand over the game for as long as the
-/// member played on. The next reply brings them back. A timer, not a poll —
-/// the owner's call, and it costs the site nothing. Hidden whenever there is nothing honest to show — no running
-/// session, a pause, the game not in front, the game gone — and repainted
-/// only when a figure changes. Following the window is a position query
-/// four times a second and nothing more.
+/// The slots are the site's too (bdo#728): which items, their names and
+/// counts and where their icons are all arrive on the reply, and nothing
+/// here chooses — a slot set on the site mid-run shows at the next reply,
+/// which is the next pickup or the quiet ask, by the same no-poll ruling.
+/// Three minutes without a reply and everything goes (owner, 2026-09-09):
+/// the sender speaks only when there is loot to send, so a session stopped
+/// with no pickup after it would otherwise never reach this window, and
+/// stale figures would stand over the game for as long as the member played
+/// on. The next reply brings them back. A timer, not a poll — the owner's
+/// call, and it costs the site nothing. Hidden whenever there is nothing
+/// honest to show — no running session, a pause, the game not in front, the
+/// game gone — and repainted only when a figure changes. Following the
+/// window is a position query four times a second and nothing more.
 ///
-/// Where it sits is an <see cref="OverlayPlacement"/> (#43) — anchor, offset
-/// and a text size that is a share of the game window's height — resolved
-/// against the window's bounds on every follow, so the same setting holds
-/// across a resolution change or a resized client. While the settings
-/// window's Overlay page is open the same window draws sample figures
-/// instead (<see cref="Preview"/>), so the page needs no mock of its own.
+/// Where the figures sit is an <see cref="OverlayPlacement"/> (#43) and where
+/// the slots sit a <see cref="SlotsPlacement"/> — anchor, offset and a text
+/// size that is a share of the game window's height, the slots with a
+/// spacing and a direction on top — resolved against the window's bounds on
+/// every follow, so the same setting holds across a resolution change or a
+/// resized client. While the settings window's Overlay or Item slots page is
+/// open the same windows draw samples instead (<see cref="Preview"/>), so
+/// the pages need no mock of their own.
 ///
-/// That is also the one time the window takes the mouse: in preview the
-/// click-through style is dropped so the sample figures can be dragged to
-/// where they should sit, and a drop is said back as a placement — the
-/// anchor snaps to the cell of the window the figures landed in, the offset
-/// follows (<see cref="Placed"/>). The moment the page closes the style is
-/// back and the window is click-through again; live figures are never in
-/// the way of a click on the game.
+/// That is also the one time the windows take the mouse: in preview the
+/// click-through style is dropped so the samples can be dragged to where
+/// they should sit, and a drop is said back as a placement — the anchor
+/// snaps to the cell of the window the bitmap landed in, the offset follows
+/// (<see cref="Placed"/>, <see cref="SlotsPlaced"/>). The moment the page
+/// closes the style is back and the windows are click-through again; live
+/// figures are never in the way of a click on the game.
 /// </summary>
-public sealed class OverlayForm : Form
+public sealed class OverlayForm : LayeredPane
 {
-    private const int WsExLayered = 0x00080000;
-    private const int WsExTransparent = 0x00000020;
-    private const int WsExToolWindow = 0x00000080;
-    private const int WsExNoActivate = 0x08000000;
-    private const int WsExTopmost = 0x00000008;
-
     /// <summary>The figures the settings page previews with. Fixed: an editable sample is a control nobody uses twice.</summary>
     public const string SampleValue = "12,345,678";
     public const string SamplePace = "45.6M/h";
@@ -79,6 +84,9 @@ public sealed class OverlayForm : Form
     /// </summary>
     private const long PaceAfterSec = 120;
 
+    /// <summary>Three slots, by ruling. A site that ever sent more is drawn to three.</summary>
+    private const int SlotCount = 3;
+
     private static readonly TimeSpan FollowPace = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan FindPace = TimeSpan.FromSeconds(5);
 
@@ -89,24 +97,23 @@ public sealed class OverlayForm : Form
     private readonly System.Windows.Forms.Timer _follow;
     private readonly PrivateFontCollection? _fonts;
     private readonly IntPtr _fontMemory;
+    private readonly IconCache _icons;
+    private readonly SlotsPane _slots;
     private Font _valueFont;
     private Font _paceFont;
     private float _valuePx;
     private float _pacePx;
 
     private OverlayPlacement _placement;
+    private SlotsPlacement _slotsPlacement;
     private string _line1 = "";
     private string _line2 = "";
+    private IReadOnlyList<SlotsPane.Row> _rows = [];
     private bool _live;                  // the site last reported a running session
     private bool _preview;               // the settings page is open: sample figures, game in front or not
-    private bool _takesMouse;            // the click-through style is off, for dragging in a preview
-    private bool _dragging;
-    private Point _dragStart;            // screen: where the mouse went down
-    private Point _dragOrigin;           // screen: where the window was then
     private bool _dirty = true;          // a figure changed since the last paint
-    private bool _shown;
-    private Size _painted;
-    private Point _shownAt = new(int.MinValue, int.MinValue);
+    private bool _slotsDirty = true;     // a slot, or the slots' layout, changed since theirs
+    private Size _slotsWindow;           // the game window size the slots were last laid out for: the spacing is a share of it
     private IntPtr _game;
     private DateTime _nextFind = DateTime.MinValue;
     private DateTime _heardAt = DateTime.MinValue; // the last reply that carried a session
@@ -114,65 +121,87 @@ public sealed class OverlayForm : Form
     /// <summary>The figures were dragged somewhere in a preview, and this is where, as a placement.</summary>
     public event Action<OverlayPlacement>? Placed;
 
-    public OverlayForm(OverlayPlacement placement)
-    {
-        FormBorderStyle = FormBorderStyle.None;
-        ShowInTaskbar = false;
-        StartPosition = FormStartPosition.Manual;
-        TopMost = true;
-        Text = "LushBDO Companion overlay";
+    /// <summary>The slots were dragged somewhere in a preview, and this is where, as their placement.</summary>
+    public event Action<SlotsPlacement>? SlotsPlaced;
 
+    public OverlayForm(OverlayPlacement placement, SlotsPlacement slots, IconCache icons) : base("LushBDO Companion overlay")
+    {
         (_fonts, _fontMemory) = LoadTypeface();
         _placement = placement;
+        _slotsPlacement = slots;
+        _icons = icons;
         // Sized for nothing yet: the first follow that sees the game window
         // remakes these at the sizes the placement says for that window.
         _valuePx = _pacePx = 0;
         _valueFont = MakeFont(1);
         _paceFont = MakeFont(1);
+        _slots = new SlotsPane(icons, MakeFont);
 
-        _ = Handle; // the layered window exists before the first figure arrives
+        Dropped += at =>
+        {
+            if (GameBounds() is { } bounds)
+            {
+                _placement = _placement.At(bounds, Painted, at);
+                Placed?.Invoke(_placement);
+            }
+            Follow();
+        };
+        _slots.Dropped += at =>
+        {
+            if (GameBounds() is { } bounds)
+            {
+                _slotsPlacement = _slotsPlacement.At(bounds, _slots.Painted, at);
+                SlotsPlaced?.Invoke(_slotsPlacement);
+            }
+            Follow();
+        };
+        _icons.Loaded += OnIconLoaded;
+
         _follow = new System.Windows.Forms.Timer { Interval = (int)FollowPace.TotalMilliseconds };
         _follow.Tick += (_, _) => Follow();
         _follow.Start();
     }
 
-    protected override bool ShowWithoutActivation => true;
-
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            var p = base.CreateParams;
-            p.ExStyle |= WsExLayered | WsExTransparent | WsExToolWindow | WsExNoActivate | WsExTopmost;
-            return p;
-        }
-    }
-
     /// <summary>
-    /// Where to draw. Takes effect on the spot: a moved anchor or offset is one
-    /// window move, a changed size is one repaint — the settings page calls
-    /// this on every control change and that is all each change costs.
+    /// Where to draw the figures. Takes effect on the spot: a moved anchor or
+    /// offset is one window move, a changed size is one repaint — the settings
+    /// page calls this on every control change and that is all each change
+    /// costs. A changed column is a repaint too, since the two lines align on
+    /// the edge they hang from.
     /// </summary>
     public void Place(OverlayPlacement placement)
     {
+        if (placement.Column != _placement.Column) _dirty = true;
         _placement = placement;
         Follow();
     }
 
+    /// <summary>Where to draw the slots, likewise. Direction, spacing and column all change the bitmap, so it is one repaint.</summary>
+    public void PlaceSlots(SlotsPlacement placement)
+    {
+        _slotsPlacement = placement;
+        _slotsDirty = true;
+        Follow();
+    }
+
     /// <summary>
-    /// The settings page's live preview: draw the sample figures over the
-    /// game whether or not a session is live and whether or not the game is
-    /// in front — the settings window is what is in front then — and take
-    /// the mouse so they can be dragged. One repaint on the way in and one
-    /// on the way out; the live figures come back exactly as they were, and
+    /// The settings page's live preview: draw the samples over the game
+    /// whether or not a session is live and whether or not the game is in
+    /// front — the settings window is what is in front then — and take the
+    /// mouse so they can be dragged. One repaint on the way in and one on the
+    /// way out; the live figures come back exactly as they were, and
     /// click-through with them.
     /// </summary>
     public void Preview(bool on)
     {
         if (on == _preview) return;
         _preview = on;
-        if (!on && _dragging) EndDrag(apply: false);
-        _dirty = true;
+        if (!on)
+        {
+            CancelDrag();
+            _slots.CancelDrag();
+        }
+        _dirty = _slotsDirty = true;
         Follow();
     }
 
@@ -183,7 +212,8 @@ public sealed class OverlayForm : Form
     /// one as the site's headline, before the market's cut — and a value the
     /// site could not put on the sheet gives way to the item count rather
     /// than reading as zero. A pace there is not one of yet — the run too
-    /// young, or a site that sends none — is a dash in the pace's place.
+    /// young, or a site that sends none — is a dash in the pace's place. The
+    /// slots are the reply's too, in its order, the empty ones left out.
     /// </summary>
     public void Report(IngestClient.SessionInfo? session)
     {
@@ -200,17 +230,59 @@ public sealed class OverlayForm : Form
             { SilverPerHourGross: { } pace, ElapsedSec: >= PaceAfterSec } => Compact(pace) + "/h",
             _ => NoPace,
         };
+        var rows = RowsOf(session);
         // Every reply with a session on it restarts the clock, the same
         // figures included: the next follow brings back what staleness hid.
         if (live) _heardAt = DateTime.UtcNow;
-        if (live == _live && line1 == _line1 && line2 == _line2) return;
+        var sameFigures = live == _live && line1 == _line1 && line2 == _line2;
+        var sameRows = rows.SequenceEqual(_rows);
+        if (sameFigures && sameRows) return;
         _live = live;
         _line1 = line1;
         _line2 = line2;
+        _rows = rows;
         // The samples are what is on screen during a preview; the new figures
-        // are painted when it ends.
-        if (!_preview) _dirty = true;
+        // are painted when it ends. Each window repaints for its own change
+        // only: a pickup that moved a slot's count leaves the figures' bitmap
+        // alone unless the value moved too.
+        if (!_preview)
+        {
+            if (!sameFigures) _dirty = true;
+            if (!sameRows) _slotsDirty = true;
+        }
         Follow();
+    }
+
+    /// <summary>
+    /// The reply's slots as rows to draw: the first three, in slot order,
+    /// filled ones only — a cleared slot closes up rather than leaving a
+    /// hole in a HUD. An icon path is taken only if it is one, which is what
+    /// keeps the cache from ever being asked for anything else.
+    /// </summary>
+    private static IReadOnlyList<SlotsPane.Row> RowsOf(IngestClient.SessionInfo? session)
+    {
+        if (session?.Slots is not { Count: > 0 } slots) return [];
+        var rows = new List<SlotsPane.Row>(SlotCount);
+        foreach (var slot in slots.Take(SlotCount))
+        {
+            if (slot is null) continue;
+            var icon = slot.IconPath is { } path && IngestClient.IsIconPath(path) ? path : null;
+            rows.Add(new SlotsPane.Row(slot.Qty.ToString("N0", Inv), icon, null));
+        }
+        return rows;
+    }
+
+    private void OnIconLoaded()
+    {
+        _slotsDirty = true;
+        Follow();
+    }
+
+    private Rectangle? GameBounds()
+    {
+        if (_game == IntPtr.Zero) return null;
+        var bounds = GameWindow.BoundsOf(_game);
+        return bounds.Width > 0 && bounds.Height > 0 ? bounds : null;
     }
 
     private void Follow()
@@ -219,20 +291,19 @@ public sealed class OverlayForm : Form
         // Applied on every follow rather than only when the preview flips,
         // so nothing can leave a live overlay sitting in the way of a click.
         TakeMouse(_preview);
+        _slots.TakeMouse(_preview);
         if (!(_live || _preview))
         {
-            Conceal();
+            ConcealAll();
             return;
         }
         // Figures nobody has vouched for in three minutes come down; a
         // preview draws samples and has no reply to be stale against.
         if (!_preview && DateTime.UtcNow - _heardAt > StaleAfter)
         {
-            Conceal();
+            ConcealAll();
             return;
         }
-        // Mid-drag the mouse says where the window is, not the placement.
-        if (_dragging) return;
 
         // The game window is found the way the picker finds it — by process —
         // and that walk is not free, so it happens when the handle is lost and
@@ -243,14 +314,14 @@ public sealed class OverlayForm : Form
             _game = IntPtr.Zero;
             if (now < _nextFind)
             {
-                Conceal();
+                ConcealAll();
                 return;
             }
             _nextFind = now + FindPace;
             _game = GameWindow.Find()?.Hwnd ?? IntPtr.Zero;
             if (_game == IntPtr.Zero)
             {
-                Conceal();
+                ConcealAll();
                 return;
             }
         }
@@ -261,16 +332,22 @@ public sealed class OverlayForm : Form
         // precisely while the member is placing this one.
         if (!_preview && GetForegroundWindow() != _game)
         {
-            Conceal();
+            ConcealAll();
             return;
         }
         var bounds = GameWindow.BoundsOf(_game);
         if (bounds.Width < 1 || bounds.Height < 1)
         {
-            Conceal();
+            ConcealAll();
             return;
         }
 
+        FollowFigures(bounds);
+        FollowSlots(bounds);
+    }
+
+    private void FollowFigures(Rectangle bounds)
+    {
         // The text sizes are shares of the window's height, so a resized
         // client or a changed setting is a new font; a window that only moved
         // is not.
@@ -294,103 +371,46 @@ public sealed class OverlayForm : Form
         }
 
         if (_dirty) Render();
-        var at = _placement.Resolve(bounds, _painted);
-        if (at != _shownAt)
+        // Mid-drag the mouse says where the window is, not the placement.
+        if (Dragging) return;
+        MoveTo(_placement.Resolve(bounds, Painted));
+        Reveal();
+    }
+
+    private void FollowSlots(Rectangle bounds)
+    {
+        var rows = _preview ? SlotsPane.Samples : _rows;
+        if (rows.Count == 0)
         {
-            SetWindowPos(Handle, HwndTopmost, at.X, at.Y, 0, 0, SwpNoSize | SwpNoActivate);
-            _shownAt = at;
+            _slots.Conceal();
+            return;
         }
-        if (!_shown)
+        if (_slots.Fit(_slotsPlacement, bounds.Size)) _slotsDirty = true;
+        if (bounds.Size != _slotsWindow)
         {
-            ShowWindow(Handle, SwShowNoActivate);
-            _shown = true;
+            _slotsWindow = bounds.Size;
+            _slotsDirty = true;
         }
-    }
-
-    private void Conceal()
-    {
-        if (!_shown || IsDisposed) return;
-        ShowWindow(Handle, SwHide);
-        _shown = false;
-    }
-
-    /// <summary>
-    /// Click-through or not. The style is what makes the window passive
-    /// beside the game — the mouse goes through the figures to whatever is
-    /// under them — and it is dropped for exactly as long as a preview
-    /// lasts, so the figures can be picked up. The cursor says so.
-    /// </summary>
-    private void TakeMouse(bool on)
-    {
-        if (on == _takesMouse) return;
-        _takesMouse = on;
-        var style = GetWindowLongPtr(Handle, GwlExStyle).ToInt64();
-        style = on ? style & ~WsExTransparent : style | WsExTransparent;
-        SetWindowLongPtr(Handle, GwlExStyle, new IntPtr(style));
-        Cursor = on ? Cursors.SizeAll : Cursors.Default;
-    }
-
-    // --- Dragging, in a preview only --------------------------------------
-    //
-    // A layered window is hit only where its pixels have alpha, which is why
-    // Render gives the whole bitmap a hair of alpha in a preview: the figures
-    // can be grabbed between the digits too. The window follows the mouse by
-    // plain moves while the button is down, and the drop becomes a placement.
-
-    protected override void OnMouseDown(MouseEventArgs e)
-    {
-        base.OnMouseDown(e);
-        if (e.Button != MouseButtons.Left || !_takesMouse || !_shown) return;
-        _dragging = true;
-        _dragStart = Cursor.Position;
-        _dragOrigin = _shownAt;
-        Capture = true;
-    }
-
-    protected override void OnMouseMove(MouseEventArgs e)
-    {
-        base.OnMouseMove(e);
-        if (!_dragging) return;
-        var now = Cursor.Position;
-        var at = new Point(_dragOrigin.X + now.X - _dragStart.X, _dragOrigin.Y + now.Y - _dragStart.Y);
-        if (at == _shownAt) return;
-        SetWindowPos(Handle, HwndTopmost, at.X, at.Y, 0, 0, SwpNoSize | SwpNoActivate);
-        _shownAt = at;
-    }
-
-    protected override void OnMouseUp(MouseEventArgs e)
-    {
-        base.OnMouseUp(e);
-        if (_dragging && e.Button == MouseButtons.Left) EndDrag(apply: true);
-    }
-
-    protected override void OnMouseCaptureChanged(EventArgs e)
-    {
-        base.OnMouseCaptureChanged(e);
-        if (_dragging && !Capture) EndDrag(apply: true); // the capture was taken away mid-drag: keep where it got to
-    }
-
-    private void EndDrag(bool apply)
-    {
-        _dragging = false;
-        if (Capture) Capture = false;
-        if (apply && _game != IntPtr.Zero)
+        if (_slotsDirty)
         {
-            var bounds = GameWindow.BoundsOf(_game);
-            if (bounds.Width > 0 && bounds.Height > 0)
-            {
-                _placement = _placement.At(bounds, _painted, _shownAt);
-                Placed?.Invoke(_placement);
-            }
+            _slots.Render(_slotsPlacement, rows, bounds.Size, _preview);
+            _slotsDirty = false;
         }
-        Follow();
+        if (_slots.Dragging) return;
+        _slots.MoveTo(_slotsPlacement.Resolve(bounds, _slots.Painted));
+        _slots.Reveal();
+    }
+
+    private void ConcealAll()
+    {
+        Conceal();
+        _slots.Conceal();
     }
 
     /// <summary>
     /// The chat's own text contract, drawn our way: a bright core with a dark
     /// outline within reach, so it reads over any scenery the way the loot log
-    /// does. Drawn into an alpha bitmap and handed to the compositor whole;
-    /// there is no WM_PAINT and nothing for the game to redraw over.
+    /// does. Drawn into an alpha bitmap and handed to the compositor whole.
     /// </summary>
     private void Render()
     {
@@ -460,32 +480,7 @@ public sealed class OverlayForm : Form
             g.DrawPath(pen, path);
             g.FillPath(Brushes.White, path);
         }
-        _painted = bitmap.Size;
         Push(bitmap);
-    }
-
-    private void Push(Bitmap bitmap)
-    {
-        var screenDc = GetDC(IntPtr.Zero);
-        var memDc = CreateCompatibleDC(screenDc);
-        var hBitmap = IntPtr.Zero;
-        var previous = IntPtr.Zero;
-        try
-        {
-            hBitmap = bitmap.GetHbitmap(Color.FromArgb(0));
-            previous = SelectObject(memDc, hBitmap);
-            var size = new SIZE { cx = bitmap.Width, cy = bitmap.Height };
-            var source = new POINT { x = 0, y = 0 };
-            var blend = new BLENDFUNCTION { BlendOp = AcSrcOver, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = AcSrcAlpha };
-            UpdateLayeredWindow(Handle, screenDc, IntPtr.Zero, ref size, memDc, ref source, 0, ref blend, UlwAlpha);
-        }
-        finally
-        {
-            if (previous != IntPtr.Zero) SelectObject(memDc, previous);
-            if (hBitmap != IntPtr.Zero) DeleteObject(hBitmap);
-            DeleteDC(memDc);
-            ReleaseDC(IntPtr.Zero, screenDc);
-        }
     }
 
     private static string Silver(long value) => value.ToString("N0", Inv);
@@ -502,7 +497,7 @@ public sealed class OverlayForm : Form
     /// Pearl.ttf, embedded beside the icon (PR #40): Inter SemiBold under the
     /// OFL, registered privately for this process — nothing is installed. The
     /// bytes have to outlive the collection, so they are pinned for the
-    /// window's lifetime and freed with it.
+    /// window's lifetime and freed with it. Both panes draw from it.
     /// </summary>
     private static (PrivateFontCollection? Fonts, IntPtr Memory) LoadTypeface()
     {
@@ -544,6 +539,8 @@ public sealed class OverlayForm : Form
         {
             _follow.Stop();
             _follow.Dispose();
+            _icons.Loaded -= OnIconLoaded;
+            _slots.Dispose();
             _valueFont.Dispose();
             _paceFont.Dispose();
             _fonts?.Dispose();
@@ -552,43 +549,6 @@ public sealed class OverlayForm : Form
         base.Dispose(disposing);
     }
 
-    // --- Win32 -----------------------------------------------------------
-
-    private static readonly IntPtr HwndTopmost = new(-1);
-    private const int GwlExStyle = -20;
-    private const uint SwpNoSize = 0x0001;
-    private const uint SwpNoActivate = 0x0010;
-    private const int SwHide = 0;
-    private const int SwShowNoActivate = 4;
-    private const byte AcSrcOver = 0;
-    private const byte AcSrcAlpha = 1;
-    private const int UlwAlpha = 2;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT { public int x, y; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SIZE { public int cx, cy; }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    private struct BLENDFUNCTION
-    {
-        public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat;
-    }
-
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int cmd);
-    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
-    // The Ptr variants: the app is built for win-x64 only, where the plain ones do not exist.
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] private static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
-    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
-    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr dc);
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr dstDc, IntPtr dst, ref SIZE size, IntPtr srcDc, ref POINT src, int key, ref BLENDFUNCTION blend, int flags);
-    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
-    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
-    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
-    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
 }

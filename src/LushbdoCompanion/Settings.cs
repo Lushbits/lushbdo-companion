@@ -1,3 +1,4 @@
+using System.Drawing;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -61,6 +62,13 @@ public sealed class Settings
     /// each time it follows them, and the settings page changes it live.
     /// </summary>
     public OverlayPlacement Overlay { get; set; } = OverlayPlacement.Default;
+
+    /// <summary>
+    /// Where the three item slots sit (#52): one anchor and offset for the
+    /// group, a text size, the gap between them and which way they run. Which
+    /// items fill them is the site's to say and is not a setting here.
+    /// </summary>
+    public SlotsPlacement Slots { get; set; } = SlotsPlacement.Default;
 
     /// <summary>One saved rectangle, window-relative physical pixels.</summary>
     public sealed class StoredRegion
@@ -228,6 +236,7 @@ public sealed class Settings
                 // whatever numbers a hand edit left; neither may reach the
                 // window, which draws wherever it is told.
                 settings.Overlay = settings.Overlay is null ? OverlayPlacement.Default : settings.Overlay.Clamped();
+                settings.Slots = settings.Slots is null ? SlotsPlacement.Default : settings.Slots.Clamped();
                 if (scrub) settings.Save();
                 return settings;
             }
@@ -294,6 +303,7 @@ public sealed class Settings
     /// plaintext beside the protected copy it decrypts from.
     /// </summary>
     [JsonIgnore]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public string Token
     {
         get
@@ -318,5 +328,6 @@ public sealed class Settings
     }
 
     [JsonIgnore]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public bool IsPaired => TokenProtected.Length > 0 && Token.Length > 0;
 }

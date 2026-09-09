@@ -6,12 +6,14 @@ using System.Text.Json.Serialization;
 namespace LushbdoCompanion;
 
 /// <summary>
-/// The two conversations this app has with the site: a batch of loot lines to
-/// /gather/ingest, and a silver balance to /silver/record. The contract is the
-/// server's; nothing here interprets what it carries.
+/// The conversations this app has with the site: a batch of loot lines to
+/// /gather/ingest, a silver balance to /silver/record, and — the one read —
+/// an item icon from /icons for a slot the reply named (#52, bdo#728). The
+/// contract is the server's; nothing here interprets what it carries.
 ///
-/// One credential opens both — the site's own ruling (bdo#668), so a member who
-/// has already paired posts balances without minting or pasting anything.
+/// One credential opens all of them — the site's own ruling (bdo#668), so a
+/// member who has already paired posts balances and fetches icons without
+/// minting or pasting anything.
 /// </summary>
 public sealed class IngestClient(Settings settings)
 {
@@ -57,7 +59,24 @@ public sealed class IngestClient(Settings settings)
         [property: JsonPropertyName("valueNet")] long? ValueNet = null,
         [property: JsonPropertyName("silverPerHourGross")] long? SilverPerHourGross = null,
         [property: JsonPropertyName("silverPerHourNet")] long? SilverPerHourNet = null,
-        [property: JsonPropertyName("unvaluedRows")] int UnvaluedRows = 0);
+        [property: JsonPropertyName("unvaluedRows")] int UnvaluedRows = 0,
+        // The three item slots the member set on the site (bdo#728), in slot
+        // order, null where a slot is empty — so slot 2 stays slot 2 when
+        // slot 1 is cleared. Absent on a site from before it, and the
+        // overlay (#52) draws none then. Nothing here chooses an item: the
+        // app draws whatever the site names, and only that.
+        [property: JsonPropertyName("slots")] IReadOnlyList<SlotInfo?>? Slots = null);
+
+    /// <summary>
+    /// One filled slot: the item the member is watching, the session row's
+    /// running count, and the path of its icon on the site — nullable, since
+    /// about 1.8% of items have no art. The name is the site's own spelling.
+    /// </summary>
+    public sealed record SlotInfo(
+        [property: JsonPropertyName("itemId")] long ItemId,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("qty")] long Qty,
+        [property: JsonPropertyName("iconPath")] string? IconPath = null);
 
     public sealed record MatchedLine(
         [property: JsonPropertyName("line")] string LineText,
@@ -193,6 +212,75 @@ public sealed class IngestClient(Settings settings)
         {
             return new SilverResult(false, 0, $"Could not reach the site: {e.Message}", null, null);
         }
+    }
+
+    /// <summary>
+    /// One icon, fetched the way the browser fetches it: `GET /icons/&lt;path&gt;`
+    /// on the same credential, for a path a reply named (bdo#728 opens the
+    /// route to a paired device for exactly that). `NotModified` is the site
+    /// saying the cached bytes still stand — the day-long cache the route was
+    /// built for, honoured here by carrying the ETag back — and `Bytes` is
+    /// null then. `Status` 404 is an item whose art is genuinely absent, and
+    /// 401 is what it is everywhere else: revoked.
+    /// </summary>
+    public sealed record IconResult(bool Ok, int Status, byte[]? Bytes, string? ETag, string? Error)
+    {
+        public bool NotModified => Ok && Status == 304;
+    }
+
+    public async Task<IconResult> FetchIconAsync(string path, string? ifNoneMatch, CancellationToken ct = default)
+    {
+        var token = settings.Token;
+        if (token.Length == 0) return new IconResult(false, 0, null, null, "No token.");
+        if (!IsIconPath(path)) return new IconResult(false, 0, null, null, "Not an icon path.");
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{settings.BaseUrl.TrimEnd('/')}/icons/{path}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            if (!string.IsNullOrEmpty(ifNoneMatch))
+                request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
+
+            using var response = await Http.SendAsync(request, ct);
+            var status = (int)response.StatusCode;
+            var etag = response.Headers.ETag?.ToString();
+            if (status == 304) return new IconResult(true, status, null, etag, null);
+            if (status == 401) return new IconResult(false, status, null, null, "The site does not recognise this token.");
+            if (status == 403) return new IconResult(false, status, null, null, "This token may not read icons.");
+            if (!response.IsSuccessStatusCode)
+                return new IconResult(false, status, null, null, $"The site answered HTTP {status}.");
+
+            var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+            return new IconResult(true, status, bytes, etag, null);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new IconResult(false, 0, null, null, "The site did not answer within 30 seconds.");
+        }
+        catch (HttpRequestException e)
+        {
+            return new IconResult(false, 0, null, null, $"Could not reach the site: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The site's own rule for what an icon key looks like (`isIconPath` in
+    /// its `$lib/icons`): lowercase, from the game's archive tree, ending in
+    /// `.webp`, with no empty, `.` or `..` segment. The app only ever asks for
+    /// paths the site named on a reply, and checking them anyway is what makes
+    /// that true by construction rather than by trust — nothing here can be
+    /// talked into fetching anything but an icon.
+    /// </summary>
+    public static bool IsIconPath(string path)
+    {
+        if (path.Length is 0 or > 255) return false;
+        if (!path.EndsWith(".webp", StringComparison.Ordinal)) return false;
+        if (!char.IsAsciiLetterLower(path[0]) && !char.IsAsciiDigit(path[0])) return false;
+        foreach (var c in path)
+            if (!(char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c is '.' or '_' or '/' or '-')) return false;
+        foreach (var segment in path.Split('/'))
+            if (segment is "" or "." or "..") return false;
+        return true;
     }
 
     /// <summary>The site names the rule a payload broke; carry its words rather than inventing any.</summary>

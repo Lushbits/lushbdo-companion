@@ -14,6 +14,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     private readonly Settings _settings;
     private readonly IngestClient _client;
     private readonly LogWindow _log = new();
+    private readonly IconCache _icons;
     private readonly System.Windows.Forms.Timer _updateTimer;
     private readonly ToolStripMenuItem _watchItem;
     private LootWatcher? _watcher;
@@ -28,6 +29,9 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     {
         _settings = Settings.Load();
         _client = new IngestClient(_settings);
+        // The slots' icons (#52) outlive any one overlay window: fetched once
+        // per path, kept for the run, and on disk for the next.
+        _icons = new IconCache(_client, _log.Append);
 
         _watchItem = new ToolStripMenuItem("Start watching", null, async (_, _) => await ToggleWatchingAsync())
         {
@@ -469,7 +473,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         {
             if (_overlay is null)
             {
-                _overlay = new OverlayForm(_settings.Overlay);
+                _overlay = new OverlayForm(_settings.Overlay, _settings.Slots, _icons);
                 // A drag in a preview is a placement made on the game itself:
                 // saved like one made on the page, and shown back on the page.
                 _overlay.Placed += placement =>
@@ -477,6 +481,12 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
                     _settings.Overlay = placement;
                     _settings.Save();
                     _settingsWindow?.ShowPlacement(placement);
+                };
+                _overlay.SlotsPlaced += placement =>
+                {
+                    _settings.Slots = placement;
+                    _settings.Save();
+                    _settingsWindow?.ShowSlots(placement);
                 };
             }
             return;
@@ -493,6 +503,14 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
     }
 
     public void OverlayPlaced() => _overlay?.Place(_settings.Overlay);
+
+    public void SlotsPlaced() => _overlay?.PlaceSlots(_settings.Slots);
+
+    public void ClearIcons()
+    {
+        _icons.Clear();
+        _log.Append("Cached item icons cleared — each slot's icon is fetched again the next time it is drawn.");
+    }
 
     public void OverlayToggled()
     {
@@ -647,6 +665,7 @@ public sealed class TrayContext : ApplicationContext, SettingsForm.IHost
         _settingsWindow?.Close(); // ends a preview, which is what would otherwise reach for the overlay below
         _overlay?.Dispose();
         _overlay = null;
+        _icons.Dispose();
         _watcher?.Dispose();
         _sender?.Dispose();
         _silver?.Dispose();
